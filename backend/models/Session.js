@@ -1,0 +1,38 @@
+import mongoose from 'mongoose'
+const sessionSchema = new mongoose.Schema({
+  sessionId:    { type: String, required: true, unique: true, index: true },
+  username:     { type: String, required: true, index: true },
+  role:         { type: String, enum: ['ADMIN','USER','ATTACKER'], required: true },
+  ip:           { type: String, default: 'Unknown', index: true },
+  country:      { type: String, default: 'Unknown', index: true },
+  city:         { type: String, default: 'Unknown' },
+  region:       { type: String, default: 'Unknown' },
+  lat:          { type: Number, default: 0 },
+  lng:          { type: Number, default: 0 },
+  timezone:     { type: String, default: 'Unknown' },
+  isp:          { type: String, default: 'Unknown' },
+  browser:      { type: String, default: 'Unknown' },
+  os:           { type: String, default: 'Unknown' },
+  device:       { type: String, default: 'Desktop' },
+  userAgent:    { type: String, default: '' },
+  state:        { type: String, enum: ['NORMAL','SUSPICIOUS','ATTACKER'], default: 'NORMAL', index: true },
+  riskScore:    { type: Number, default: 0, min: 0, max: 100 },
+  aiLabel:      { type: String, default: null },
+  aiConfidence: { type: Number, default: null },
+  attackTypes:  { type: [String], default: [] },
+  attackCount:  { type: Number, default: 0 },
+  timeline:     { type: Array, default: [] },
+  fingerprint:  { type: Object, default: {} },
+  inHoney:      { type: Boolean, default: false },
+  honeyDuration:{ type: Number, default: 0 },
+  honeyInteractions: { type: Number, default: 0 },
+  loginTime:    { type: Date, default: Date.now },
+  lastSeen:     { type: Date, default: Date.now },
+  logoutTime:   { type: Date, default: null },
+  isActive:     { type: Boolean, default: true, index: true },
+  isBlocked:    { type: Boolean, default: false },
+  fnStartTime:  { type: Date, default: null },
+  isSimulated:  { type: Boolean, default: false }
+}, { timestamps: true })
+sessionSchema.index({ createdAt: 1 }, { expireAfterSeconds: 86400 * 7 })
+export default mongoose.model('Session', sessionSchema)
