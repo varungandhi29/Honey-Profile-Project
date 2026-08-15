@@ -1,14 +1,19 @@
 import express from 'express'
+import mongoose from 'mongoose'
 import Alert from '../models/Alert.js'
 import { cache } from '../services/cacheService.js'
 const router = express.Router()
+
 router.get('/', async (req, res) => {
   try {
     const { severity, status, limit = 100 } = req.query
     const filter = {}
     if (severity) filter.severity = severity
     if (status) filter.status = status
-    res.json(await Alert.find(filter).sort({ timestamp: -1 }).limit(parseInt(limit)))
+    if (mongoose.connection.readyState === 1) {
+      return res.json(await Alert.find(filter).sort({ timestamp: -1 }).limit(parseInt(limit)))
+    }
+    res.json([])
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
 router.patch('/:alertId/acknowledge', async (req, res) => {

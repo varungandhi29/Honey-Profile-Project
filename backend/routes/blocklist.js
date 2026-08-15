@@ -1,5 +1,7 @@
 import express from 'express'
+import mongoose from 'mongoose'
 import BlockedIP from '../models/BlockedIP.js'
+import BlockedFingerprint from '../models/BlockedFingerprint.js'
 import Session from '../models/Session.js'
 import Attack from '../models/Attack.js'
 import { cache } from '../services/cacheService.js'
@@ -11,8 +13,11 @@ const router = express.Router()
 // GET /api/blocklist — get all blocked IPs
 router.get('/', async (req, res) => {
   try {
-    const blocked = await BlockedIP.find().sort({ blockedAt: -1 })
-    res.json(blocked)
+    if (mongoose.connection.readyState === 1) {
+      const blocked = await BlockedIP.find().sort({ blockedAt: -1 })
+      return res.json(blocked)
+    }
+    res.json([])
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
@@ -22,43 +27,50 @@ router.post('/', async (req, res) => {
     const { ip, blockedBy, reason, permanent, expiresAt } = req.body
     if (!ip) return res.status(400).json({ error: 'IP required' })
 
-    // Get attack history for this IP
-    const attackCount = await Attack.countDocuments({ sourceIP: ip })
-    const session = await Session.findOne({ ip })
+    let blocked = { ip, blockedBy: blockedBy || 'admin', reason: reason || 'Manual block by admin', blockedAt: new Date() }
+    let terminatedCount = 0
 
-    const blocked = await BlockedIP.findOneAndUpdate(
-      { ip },
-      {
-        ip, blockedBy: blockedBy || 'admin',
-        reason: reason || 'Manual block by admin',
-        attackCount, permanent: permanent !== false,
-        expiresAt: expiresAt || null,
-        country: session?.country || 'Unknown',
-        city: session?.city || 'Unknown',
-        blockedAt: new Date()
-      },
-      { upsert: true, new: true }
-    )
+    if (mongoose.connection.readyState === 1) {
+      try {
+        const attackCount = await Attack.countDocuments({ sourceIP: ip })
+        const session = await Session.findOne({ ip })
 
-    // Cache blocked IP for fast lookup
-    await cache.set(`blocked:${ip}`, { blocked: true, reason: blocked.reason, blockedAt: blocked.blockedAt }, 86400 * 365)
+        blocked = await BlockedIP.findOneAndUpdate(
+          { ip },
+          {
+            ip, blockedBy: blockedBy || 'admin',
+            reason: reason || 'Manual block by admin',
+            attackCount, permanent: permanent !== false,
+            expiresAt: expiresAt || null,
+            country: session?.country || 'Unknown',
+            city: session?.city || 'Unknown',
+            blockedAt: new Date()
+          },
+          { upsert: true, new: true }
+        )
 
-    // Terminate active sessions from this IP
-    const sessions = await Session.updateMany(
-      { ip, isActive: true },
-      { isActive: false, isBlocked: true, logoutTime: new Date() }
-    )
+        const sessions = await Session.updateMany(
+          { ip, role: { $ne: 'ADMIN' }, username: { $ne: 'admin' }, isActive: true },
+          { isActive: false, isBlocked: true, logoutTime: new Date() }
+        )
+        terminatedCount = sessions.modifiedCount
+      } catch (e) {
+        logger.warn(`[BLOCK DB WARNING] ${e.message}`)
+      }
+    }
+
+    // ALWAYS Cache blocked IP for fast lookup
+    await cache.set(`blocked:${ip}`, { blocked: true, reason: blocked.reason || reason || 'Manual block by admin', blockedAt: new Date() }, 86400 * 365)
 
     // Broadcast to admin
     broadcast('ip_blocked', {
-      ip, blockedBy: blocked.blockedBy, reason: blocked.reason,
-      country: blocked.country, city: blocked.city,
-      sessionsTerminated: sessions.modifiedCount,
+      ip, blockedBy: blocked.blockedBy || 'admin', reason: blocked.reason || 'Manual block',
+      sessionsTerminated: terminatedCount,
       timestamp: new Date().toISOString()
     })
 
     logger.info(`[BLOCK] IP ${ip} blocked by ${blockedBy} — reason: ${reason}`)
-    res.json({ success: true, blocked, sessionsTerminated: sessions.modifiedCount })
+    res.json({ success: true, blocked, sessionsTerminated: terminatedCount })
   } catch (err) {
     logger.error(`Block IP error: ${err.message}`)
     res.status(500).json({ error: err.message })
@@ -93,6 +105,63 @@ router.get('/check/:ip', async (req, res) => {
       return res.json({ blocked: true, reason: blocked.reason, blockedAt: blocked.blockedAt })
     }
     res.json({ blocked: false })
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+// POST /api/blocklist/fingerprint — block a fingerprint
+router.post('/fingerprint', async (req, res) => {
+  try {
+    const { fingerprint, blockedBy, reason, associatedIPs } = req.body
+    if (!fingerprint) return res.status(400).json({ error: 'Fingerprint required' })
+
+    let blocked = { fingerprint, blockedBy: blockedBy || 'admin', reason: reason || 'Manual block', associatedIPs: associatedIPs || [], blockedAt: new Date() }
+    if (mongoose.connection.readyState === 1) {
+      try {
+        blocked = await BlockedFingerprint.findOneAndUpdate(
+          { fingerprint },
+          { fingerprint, blockedBy: blockedBy || 'admin', reason: reason || 'Manual block', associatedIPs: associatedIPs || [], blockedAt: new Date() },
+          { upsert: true, new: true }
+        )
+      } catch (e) {
+        logger.warn(`[BLOCK FP DB WARNING] ${e.message}`)
+      }
+    }
+
+    // ALWAYS Cache fingerprint block
+    await cache.set(`blocked:fp:${fingerprint}`, { blocked: true, reason: blocked.reason || reason || 'Manual block' }, 86400 * 365)
+
+    broadcast('fingerprint_blocked', {
+      fingerprint: fingerprint.substr(0, 8) + '...',
+      associatedIPs, blockedBy,
+      timestamp: new Date().toISOString()
+    })
+
+    logger.info(`[BLOCK] Fingerprint ${fingerprint.substr(0,8)}... blocked by ${blockedBy}`)
+    res.json({ success: true, blocked })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// GET /api/blocklist/fingerprints — list all blocked fingerprints
+router.get('/fingerprints', async (req, res) => {
+  try {
+    if (mongoose.connection.readyState === 1) {
+      return res.json(await BlockedFingerprint.find().sort({ blockedAt: -1 }))
+    }
+    res.json([])
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+// DELETE /api/blocklist/fingerprint/:fp — unblock fingerprint
+router.delete('/fingerprint/:fp', async (req, res) => {
+  try {
+    const fp = decodeURIComponent(req.params.fp)
+    await BlockedFingerprint.deleteOne({ fingerprint: fp })
+    await cache.del(`blocked:fp:${fp}`)
+    broadcast('fingerprint_unblocked', { fingerprint: fp, timestamp: new Date().toISOString() })
+    logger.info(`[UNBLOCK] Fingerprint ${fp.substr(0,8)}... unblocked`)
+    res.json({ success: true })
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
 

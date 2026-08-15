@@ -17,7 +17,7 @@ const FOLDERS = [
 ];
 
 export default function DataVaultPage({ currentUser }) {
-  const [activeFolder, setActiveFolder] = useState(null);
+  const [activeFolder, setActiveFolder] = useState('fin');
   const [viewFile, setViewFile] = useState(null);
 
   const folder = activeFolder ? FOLDERS.find(f => f.id === activeFolder) : null;

@@ -1,12 +1,15 @@
 import express from 'express'
+import mongoose from 'mongoose'
 import Session from '../models/Session.js'
 import Attack from '../models/Attack.js'
 import HoneyLog from '../models/HoneyLog.js'
 import Alert from '../models/Alert.js'
 import BlockedIP from '../models/BlockedIP.js'
+import BlockedFingerprint from '../models/BlockedFingerprint.js'
 import { detectLocation } from '../middleware/geoip.js'
 import { cache } from '../services/cacheService.js'
 import { calculateRisk, getState, getAIPrediction } from '../services/riskEngine.js'
+import { checkIPReputation } from '../services/ipReputationService.js'
 import { createAlert } from '../services/alertService.js'
 import { broadcastAttack, broadcastHoney, broadcastSessionUpdate, broadcast } from '../services/broadcastService.js'
 import logger from '../middleware/logger.js'
@@ -25,25 +28,103 @@ router.get('/init', async (req, res) => {
 router.post('/register', async (req, res) => {
   try {
     const data = req.body
-    const session = await Session.findOneAndUpdate(
-      { sessionId: data.sessionId },
-      {
-        ...data,
-        state: data.role === 'ATTACKER' ? 'ATTACKER' : 'NORMAL',
-        riskScore: data.role === 'ATTACKER' ? 85 : 5,
-        isActive: true, loginTime: new Date(), lastSeen: new Date(),
-        fingerprint: {
-          deviceId: (data.ip || '').replace(/\./g,'').substr(0,8),
-          behaviorSignature: data.role === 'ATTACKER' ? 'Human manual attacker' : 'Authenticated user',
-          requestPattern: 'Linear', toolHint: data.browser || 'Browser'
+
+    // Exempt ADMIN accounts
+    if (data.role !== 'ADMIN' && data.username !== 'admin') {
+      // 1. Check Fingerprint block FIRST
+      if (data.fingerprint && typeof data.fingerprint === 'string') {
+        let cachedFp = await cache.get(`blocked:fp:${data.fingerprint}`)
+        let isFpBlocked = cachedFp?.blocked
+        let fpReason = cachedFp?.reason
+        if (!isFpBlocked && mongoose.connection.readyState === 1) {
+          try {
+            const dbFp = await BlockedFingerprint.findOne({ fingerprint: data.fingerprint })
+            if (dbFp) {
+              isFpBlocked = true
+              fpReason = dbFp.reason
+              await cache.set(`blocked:fp:${data.fingerprint}`, { blocked: true, reason: dbFp.reason }, 86400 * 365)
+            }
+          } catch {}
         }
-      },
-      { upsert: true, new: true }
-    )
+        if (isFpBlocked) {
+          logger.warn(`[REGISTER BLOCKED] Blocked Fingerprint ${data.fingerprint.substr(0,8)}... (${data.username}) attempted login`)
+          return res.status(403).json({ error: `Device is permanently blocked`, blocked: true, reason: fpReason || 'FINGERPRINT_BLOCKED' })
+        }
+      }
+
+      // 2. Check IP block SECOND
+      if (data.ip) {
+        const cached = await cache.get(`blocked:${data.ip}`)
+        let isBlocked = cached?.blocked
+        let blockReason = cached?.reason
+
+        if (!isBlocked && mongoose.connection.readyState === 1) {
+          try {
+            const dbBlocked = await BlockedIP.findOne({ ip: data.ip })
+            if (dbBlocked && (!dbBlocked.expiresAt || new Date() < dbBlocked.expiresAt)) {
+              isBlocked = true
+              blockReason = dbBlocked.reason
+              await cache.set(`blocked:${data.ip}`, { blocked: true, reason: dbBlocked.reason, blockedAt: dbBlocked.blockedAt }, 86400 * 365)
+            }
+          } catch {}
+        }
+
+        if (isBlocked) {
+          logger.warn(`[REGISTER BLOCKED] Blocked IP ${data.ip} (${data.username}) attempted login`)
+          return res.status(403).json({ error: `IP ${data.ip} is permanently blocked`, blocked: true, reason: blockReason || 'IP_BLOCKED' })
+        }
+      }
+
+      // 3. Automatic VPN / Proxy detection check
+      if (data.ip) {
+        const reputation = checkIPReputation(data.ip)
+        if (reputation.suspicious) {
+          logger.warn(`[VPN DETECTED] ${data.ip} flagged as ${reputation.label} — auto-blocking session`)
+          broadcast('vpn_detected', {
+            ip: data.ip,
+            username: data.username,
+            label: reputation.label,
+            reason: reputation.reason,
+            timestamp: new Date().toISOString()
+          })
+          return res.status(403).json({
+            error: 'Access denied',
+            reason: 'VPN_PROXY_DETECTED',
+            message: 'VPN and proxy connections are not permitted',
+            blocked: true,
+            ip: data.ip,
+            label: reputation.label
+          })
+        }
+      }
+    }
+
+    let session = { ...data }
+    if (mongoose.connection.readyState === 1) {
+      try {
+        session = await Session.findOneAndUpdate(
+          { sessionId: data.sessionId },
+          {
+            ...data,
+            fingerprintHash: typeof data.fingerprint === 'string' ? data.fingerprint : null,
+            state: data.role === 'ATTACKER' ? 'ATTACKER' : 'NORMAL',
+            riskScore: data.role === 'ATTACKER' ? 85 : 5,
+            isActive: true, loginTime: new Date(), lastSeen: new Date(),
+            fingerprint: {
+              hash: typeof data.fingerprint === 'string' ? data.fingerprint : undefined,
+              deviceId: (data.ip || '').replace(/\./g,'').substr(0,8),
+              behaviorSignature: data.role === 'ATTACKER' ? 'Human manual attacker' : 'Authenticated user',
+              requestPattern: 'Linear', toolHint: data.browser || 'Browser'
+            }
+          },
+          { upsert: true, new: true }
+        )
+      } catch {}
+    }
     await cache.set(`session:${data.sessionId}`, {
       sessionId: data.sessionId, username: data.username, role: data.role,
       ip: data.ip, country: data.country, city: data.city,
-      lat: data.lat, lng: data.lng, state: session.state, riskScore: session.riskScore
+      lat: data.lat, lng: data.lng, state: session.state || 'NORMAL', riskScore: session.riskScore || 5
     })
     req.app.get('io').emit('session_registered', session)
     logger.info(`[REGISTER] ${data.username} (${data.role}) from ${data.ip} (${data.city}, ${data.country})`)
@@ -54,81 +135,146 @@ router.post('/register', async (req, res) => {
 // POST /api/session/attack — log attack, update risk, AI prediction, broadcast
 router.post('/attack', async (req, res) => {
   try {
-    const { sessionId, username, attackType, attackDef, sourceIP, sourceCountry, sourceCity, sourceLat, sourceLng } = req.body
-    const blockedCheck = await cache.get(`blocked:${sourceIP}`)
-    if (blockedCheck?.blocked) {
-      // Log the attempt but reject it
-      await BlockedIP.findOneAndUpdate(
-        { ip: sourceIP },
-        { $inc: { attemptCount: 1 }, lastAttempt: new Date() }
-      )
+    let { sessionId, username, attackType, attackDef = {}, sourceIP, sourceCountry, sourceCity, sourceLat, sourceLng, fingerprint } = req.body
+
+    // Hard Rule 2: Fingerprint block check MUST happen BEFORE IP block check
+    if (fingerprint) {
+      let fpBlocked = await cache.get(`blocked:fp:${fingerprint}`)
+      if (fpBlocked?.blocked === undefined && mongoose.connection.readyState === 1) {
+        try {
+          const dbFp = await BlockedFingerprint.findOne({ fingerprint })
+          if (dbFp) {
+            fpBlocked = { blocked: true, reason: dbFp.reason }
+            await cache.set(`blocked:fp:${fingerprint}`, fpBlocked, 86400 * 365)
+          }
+        } catch {}
+      }
+      if (fpBlocked?.blocked) {
+        if (mongoose.connection.readyState === 1) {
+          try {
+            await BlockedFingerprint.findOneAndUpdate(
+              { fingerprint },
+              { $inc: { attemptCount: 1 }, lastAttempt: new Date(), $addToSet: { associatedIPs: sourceIP } }
+            )
+          } catch {}
+        }
+        broadcast('blocked_attempt', {
+          ip: sourceIP, fingerprint, method: 'FINGERPRINT_BLOCK',
+          message: `Blocked fingerprint attempted from new IP ${sourceIP}`,
+          timestamp: new Date().toISOString()
+        })
+        logger.warn(`[BLOCKED] Fingerprint ${fingerprint.substr(0,8)}... tried to attack from new IP ${sourceIP}`)
+        return res.status(403).json({ error: 'Blocked', blocked: true, reason: 'FINGERPRINT_BLOCKED' })
+      }
+    }
+
+    // Second: IP Block Check
+    let ipBlocked = await cache.get(`blocked:${sourceIP}`)
+    if (ipBlocked?.blocked === undefined && mongoose.connection.readyState === 1) {
+      try {
+        const dbIp = await BlockedIP.findOne({ ip: sourceIP })
+        if (dbIp && (!dbIp.expiresAt || new Date() < dbIp.expiresAt)) {
+          ipBlocked = { blocked: true, reason: dbIp.reason }
+          await cache.set(`blocked:${sourceIP}`, ipBlocked, 86400 * 365)
+        }
+      } catch {}
+    }
+    if (ipBlocked?.blocked) {
+      if (mongoose.connection.readyState === 1) {
+        try {
+          await BlockedIP.findOneAndUpdate(
+            { ip: sourceIP },
+            { $inc: { attemptCount: 1 }, lastAttempt: new Date() }
+          )
+        } catch {}
+      }
       broadcast('blocked_attempt', {
-        ip: sourceIP, timestamp: new Date().toISOString(),
-        message: `Blocked IP ${sourceIP} attempted to attack`
+        ip: sourceIP, method: 'IP_BLOCK',
+        message: `Blocked IP ${sourceIP} attempted to attack`,
+        timestamp: new Date().toISOString()
       })
       logger.warn(`[BLOCKED ATTEMPT] ${sourceIP} tried to attack but is blocked`)
-      return res.status(403).json({ error: 'IP is blocked', blocked: true })
+      return res.status(403).json({ error: 'IP is blocked', blocked: true, reason: 'IP_BLOCKED' })
     }
-    let session = await Session.findOne({ sessionId })
-    if (!session) {
-      session = await Session.create({
-        sessionId, username: username || 'testuser', role: 'ATTACKER',
-        ip: sourceIP || 'Unknown', country: sourceCountry || 'Unknown',
-        city: sourceCity || 'Unknown', lat: sourceLat || 0, lng: sourceLng || 0,
-        state: 'ATTACKER', riskScore: 85, isActive: true
-      })
+
+    // Hard Rule 4: IP reputation check logs on EVERY attack
+    const reputation = checkIPReputation(sourceIP)
+    if (reputation.suspicious) {
+      logger.info(`[REPUTATION] ${sourceIP} flagged as ${reputation.label} — +${reputation.riskBonus} risk bonus`)
+      attackDef = { ...attackDef, riskDelta: (attackDef.riskDelta || 10) + reputation.riskBonus }
     }
-    const newScore = Math.min(100, (session.riskScore || 0) + (attackDef.riskDelta || 10))
-    const newState = getState(newScore)
-    const attack = await Attack.create({
-      attackId: `ATK-${Date.now()}-${Math.random().toString(36).substr(2,4)}`,
-      type: attackDef.label, severity: attackDef.severity,
-      sourceIP: sourceIP || session.ip, sourceCountry: sourceCountry || session.country,
-      sourceCity: sourceCity || session.city, targetArea: attackDef.target,
-      riskDelta: attackDef.riskDelta, sessionId, correlationId: `CAMP-${sessionId}`
-    })
-    const updatedSession = await Session.findOneAndUpdate(
-      { sessionId },
-      {
-        riskScore: newScore, state: newState,
-        $addToSet: { attackTypes: attackDef.label },
-        $inc: { attackCount: 1 },
-        $push: { timeline: { timestamp: new Date(), action: 'ATTACK', detail: `${attackDef.label} → ${attackDef.target}`, severity: attackDef.severity } },
-        lastSeen: new Date()
-      },
-      { new: true }
-    )
-    await cache.set(`session:${sessionId}`, {
-      sessionId, username: updatedSession.username, role: updatedSession.role,
-      ip: updatedSession.ip, country: updatedSession.country, city: updatedSession.city,
-      lat: updatedSession.lat, lng: updatedSession.lng, state: newState, riskScore: newScore
-    })
-    let aiResult = null
-    try {
-      aiResult = await getAIPrediction({
-        sessionId, riskScore: newScore, attackCount: updatedSession.attackCount,
-        honeyInteractions: updatedSession.honeyInteractions || 0,
-        sessionDuration: Math.floor((Date.now() - updatedSession.loginTime) / 1000),
-        requestsPerMin: updatedSession.attackCount / Math.max(1, Math.floor((Date.now() - updatedSession.loginTime) / 60000)),
-        uniqueAttackTypes: updatedSession.attackTypes.length,
-        inHoney: updatedSession.inHoney, failedLogins: 0
-      })
-      if (aiResult) {
-        await Session.findOneAndUpdate({ sessionId }, { aiLabel: aiResult.prediction?.label, aiConfidence: aiResult.prediction?.confidence })
+
+    let session = { sessionId, username: username || 'testuser', role: 'ATTACKER', ip: sourceIP || 'Unknown', riskScore: 85, state: 'ATTACKER' }
+    let attack = { attackId: `ATK-${Date.now()}`, type: attackDef.label || attackType || 'Attack', severity: attackDef.severity || 'MEDIUM', sourceIP, sourceCountry, sourceCity, targetArea: attackDef.target || '/system' }
+
+    if (mongoose.connection.readyState === 1) {
+      try {
+        let dbSession = await Session.findOne({ sessionId })
+        if (!dbSession) {
+          dbSession = await Session.create({
+            sessionId, username: username || 'testuser', role: 'ATTACKER',
+            ip: sourceIP || 'Unknown', country: sourceCountry || 'Unknown',
+            city: sourceCity || 'Unknown', lat: sourceLat || 0, lng: sourceLng || 0,
+            state: 'ATTACKER', riskScore: 85, isActive: true,
+            fingerprintHash: fingerprint || null,
+            ipReputation: reputation
+          })
+        }
+        const newScore = Math.min(100, (dbSession.riskScore || 0) + (attackDef.riskDelta || 10))
+        const newState = getState(newScore)
+        attack = await Attack.create({
+          attackId: `ATK-${Date.now()}-${Math.random().toString(36).substr(2,4)}`,
+          type: attackDef.label || attackType || 'Attack', severity: attackDef.severity || 'MEDIUM',
+          sourceIP: sourceIP || dbSession.ip, sourceCountry: sourceCountry || dbSession.country,
+          sourceCity: sourceCity || dbSession.city, targetArea: attackDef.target || '/system',
+          riskDelta: attackDef.riskDelta || 10, sessionId, correlationId: `CAMP-${sessionId}`
+        })
+        session = await Session.findOneAndUpdate(
+          { sessionId },
+          {
+            riskScore: newScore, state: newState,
+            fingerprintHash: fingerprint || dbSession.fingerprintHash || null,
+            ipReputation: reputation,
+            $addToSet: { attackTypes: attackDef.label || attackType || 'Attack' },
+            $inc: { attackCount: 1 },
+            $push: { timeline: { timestamp: new Date(), action: 'ATTACK', detail: `${attackDef.label || attackType} → ${attackDef.target || '/system'}`, severity: attackDef.severity || 'MEDIUM' } },
+            lastSeen: new Date()
+          },
+          { new: true }
+        )
+      } catch (e) {
+        logger.warn(`[ATTACK DB WARNING] ${e.message}`)
       }
-    } catch {}
-    if (['HIGH','CRITICAL'].includes(attackDef.severity)) {
-      await createAlert({
-        severity: attackDef.severity,
-        title: `${attackDef.label} Detected`,
-        description: `${attackDef.label} from ${sourceIP || session.ip} (${sourceCountry || session.country}, ${sourceCity || session.city}) targeting ${attackDef.target}`,
-        sessionId, sourceIP: sourceIP || session.ip, attackType
-      }, req.app.get('io'))
     }
-    broadcastAttack(attack, updatedSession, aiResult)
-    broadcastSessionUpdate(updatedSession)
-    logger.info(`[ATTACK] ${attackDef.label} | ${sourceIP} | ${sourceCountry} | Risk: ${newScore} | AI: ${aiResult?.prediction?.label || 'N/A'}`)
-    res.json({ success: true, attack, session: updatedSession, aiResult })
+
+    await cache.set(`session:${sessionId}`, {
+      sessionId, username: session.username, role: session.role,
+      ip: session.ip, country: session.country, city: session.city,
+      state: session.state || 'ATTACKER', riskScore: session.riskScore || 85,
+      fingerprintHash: fingerprint || session.fingerprintHash, ipReputation: reputation
+    })
+
+    const alertData = {
+      alertId: `ALERT-${Date.now()}-${Math.random().toString(36).substr(2,4)}`,
+      severity: attackDef.severity || 'HIGH',
+      title: `${attackDef.label || attackType} Attack Detected`,
+      description: `Security Threat: ${attackDef.label || attackType} from ${sourceIP} targeting ${attackDef.target || '/system'}.`,
+      sessionId, sourceIP, timestamp: new Date().toISOString(), status: 'New'
+    }
+
+    if (mongoose.connection.readyState === 1) {
+      try {
+        await Alert.create(alertData)
+      } catch (e) {
+        logger.warn(`[ALERT DB WARNING] ${e.message}`)
+      }
+    }
+
+    broadcastAttack(attack, session, null)
+    broadcastSessionUpdate(session)
+    broadcast('new_alert', alertData)
+    logger.info(`[ATTACK] ${attackDef.label || attackType} | ${sourceIP} | ${sourceCountry} | Risk: ${session.riskScore || 85}`)
+    res.json({ success: true, attack, session, alert: alertData, ipReputation: reputation })
   } catch (err) { logger.error(`Attack error: ${err.message}`); res.status(500).json({ error: err.message }) }
 })
 
@@ -136,21 +282,31 @@ router.post('/attack', async (req, res) => {
 router.post('/honey', async (req, res) => {
   try {
     const { sessionId, attackerIP, attackerCountry, action, fakeTarget, fakeCredential } = req.body
-    const log = await HoneyLog.create({
+    let log = {
       logId: `HONEY-${Date.now()}-${Math.random().toString(36).substr(2,4)}`,
       sessionId, attackerIP: attackerIP || 'Unknown',
       attackerCountry: attackerCountry || 'Unknown',
       action: action || 'READ', fakeTarget: fakeTarget || '/unknown',
       fakeCredential: fakeCredential || null, responseSimulated: '200 OK',
       responseTime: Math.floor(Math.random() * 200 + 50)
-    })
-    const session = await Session.findOneAndUpdate(
-      { sessionId },
-      { inHoney: true, $inc: { honeyDuration: 1, honeyInteractions: 1 }, lastSeen: new Date() },
-      { new: true }
-    )
-    const honeyCount = session?.honeyInteractions || 0
-    if (honeyCount >= 10) await HoneyLog.findOneAndUpdate({ logId: log.logId }, { deepTrap: true })
+    }
+    let session = null
+    if (mongoose.connection.readyState === 1) {
+      try {
+        log = await HoneyLog.create(log)
+        session = await Session.findOneAndUpdate(
+          { sessionId },
+          { inHoney: true, $inc: { honeyDuration: 1, honeyInteractions: 1 }, lastSeen: new Date() },
+          { new: true }
+        )
+      } catch (e) {
+        logger.warn(`[HONEY DB WARNING] ${e.message}`)
+      }
+    }
+    const honeyCount = session?.honeyInteractions || 1
+    if (honeyCount >= 10 && mongoose.connection.readyState === 1) {
+      try { await HoneyLog.findOneAndUpdate({ logId: log.logId }, { deepTrap: true }) } catch {}
+    }
     broadcastHoney(log, session, honeyCount)
     res.json({ success: true, log, deepTrap: honeyCount >= 10 })
   } catch (err) { res.status(500).json({ error: err.message }) }
@@ -158,38 +314,25 @@ router.post('/honey', async (req, res) => {
 
 // GET /api/session/active
 router.get('/active', async (req, res) => {
-  try { res.json(await Session.find({ isActive: true }).sort({ lastSeen: -1 }).limit(50)) }
+  try {
+    if (mongoose.connection.readyState === 1) {
+      return res.json(await Session.find({ isActive: true }).sort({ lastSeen: -1 }).limit(50))
+    }
+    res.json([])
+  }
   catch (err) { res.status(500).json({ error: err.message }) }
 })
 
-// GET /api/session/init is above, this is individual session
-router.get('/:sessionId', async (req, res) => {
+// GET /api/session/live-feed — returns last 100 events across all sessions
+router.get('/live-feed', async (req, res) => {
   try {
-    const cached = await cache.get(`session:${req.params.sessionId}`)
-    if (cached) return res.json(cached)
-    const session = await Session.findOne({ sessionId: req.params.sessionId })
-    if (!session) return res.status(404).json({ error: 'Not found' })
-    res.json(session)
-  } catch (err) { res.status(500).json({ error: err.message }) }
-})
-
-// PATCH /api/session/:sessionId/block
-router.patch('/:sessionId/block', async (req, res) => {
-  try {
-    await Session.findOneAndUpdate({ sessionId: req.params.sessionId }, { isActive: false, isBlocked: true, logoutTime: new Date() })
-    await cache.del(`session:${req.params.sessionId}`)
-    req.app.get('io').emit('session_blocked', { sessionId: req.params.sessionId })
-    res.json({ success: true })
-  } catch (err) { res.status(500).json({ error: err.message }) }
-})
-
-// DELETE /api/session/:sessionId — logout
-router.delete('/:sessionId', async (req, res) => {
-  try {
-    await Session.findOneAndUpdate({ sessionId: req.params.sessionId }, { isActive: false, logoutTime: new Date() })
-    await cache.del(`session:${req.params.sessionId}`)
-    req.app.get('io').emit('session_removed', { sessionId: req.params.sessionId })
-    res.json({ success: true })
+    let attacks = []
+    let sessions = []
+    if (mongoose.connection.readyState === 1) {
+      attacks = await Attack.find().sort({ timestamp: -1 }).limit(50)
+      sessions = await Session.find({ isActive: true }).sort({ lastSeen: -1 })
+    }
+    res.json({ attacks, sessions, timestamp: new Date().toISOString() })
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
@@ -198,20 +341,23 @@ router.post('/heartbeat', async (req, res) => {
   try {
     const { sessionId, currentPage, mouseActivity, clickCount, timeOnPage, scrollDepth } = req.body
 
-    const session = await Session.findOneAndUpdate(
-      { sessionId },
-      {
-        lastSeen: new Date(),
-        $push: {
-          timeline: {
-            timestamp: new Date(),
-            action: 'HEARTBEAT',
-            detail: `Active on: ${currentPage} | Clicks: ${clickCount} | Scroll: ${scrollDepth}%`
+    let session = null
+    if (mongoose.connection.readyState === 1) {
+      session = await Session.findOneAndUpdate(
+        { sessionId },
+        {
+          lastSeen: new Date(),
+          $push: {
+            timeline: {
+              timestamp: new Date(),
+              action: 'HEARTBEAT',
+              detail: `Active on: ${currentPage} | Clicks: ${clickCount} | Scroll: ${scrollDepth}%`
+            }
           }
-        }
-      },
-      { new: true }
-    )
+        },
+        { new: true }
+      )
+    }
 
     if (session) {
       broadcast('session_heartbeat', {
@@ -225,16 +371,60 @@ router.post('/heartbeat', async (req, res) => {
       })
     }
 
-    res.json({ success: true, blocked: session?.isBlocked || false })
+    const isBlocked = session?.role !== 'ADMIN' && session?.username !== 'admin' && (session?.isBlocked || false)
+    res.json({ success: true, blocked: isBlocked })
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
-// GET /api/session/live-feed — returns last 100 events across all sessions
-router.get('/live-feed', async (req, res) => {
+// GET /api/session/:sessionId — individual session
+router.get('/:sessionId', async (req, res) => {
   try {
-    const attacks = await Attack.find().sort({ timestamp: -1 }).limit(50)
-    const sessions = await Session.find({ isActive: true }).sort({ lastSeen: -1 })
-    res.json({ attacks, sessions, timestamp: new Date().toISOString() })
+    const cached = await cache.get(`session:${req.params.sessionId}`)
+    if (cached) return res.json(cached)
+    if (mongoose.connection.readyState === 1) {
+      const session = await Session.findOne({ sessionId: req.params.sessionId })
+      if (session) return res.json(session)
+    }
+    res.status(404).json({ error: 'Session not found' })
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+// PATCH /api/session/:sessionId/block
+router.patch('/:sessionId/block', async (req, res) => {
+  try {
+    if (mongoose.connection.readyState === 1) {
+      await Session.findOneAndUpdate({ sessionId: req.params.sessionId }, { isActive: false, isBlocked: true, logoutTime: new Date() })
+    }
+    await cache.del(`session:${req.params.sessionId}`)
+    req.app.get('io').emit('session_blocked', { sessionId: req.params.sessionId })
+    res.json({ success: true })
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+// DELETE /api/session/:sessionId — logout
+router.delete('/:sessionId', async (req, res) => {
+  try {
+    if (mongoose.connection.readyState === 1) {
+      await Session.findOneAndUpdate({ sessionId: req.params.sessionId }, { isActive: false, logoutTime: new Date() })
+    }
+    await cache.del(`session:${req.params.sessionId}`)
+    req.app.get('io').emit('session_removed', { sessionId: req.params.sessionId })
+    res.json({ success: true })
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+// POST /api/session/clear-all — wipe all sessions, attacks, alerts, honey logs
+router.post('/clear-all', async (req, res) => {
+  try {
+    if (mongoose.connection.readyState === 1) {
+      await Session.deleteMany({})
+      await Attack.deleteMany({})
+      await Alert.deleteMany({})
+      await HoneyLog.deleteMany({})
+    }
+    await cache.flush()
+    req.app.get('io').emit('clear_all', { timestamp: new Date().toISOString() })
+    res.json({ success: true, message: 'All sessions, attacks, and logs cleared' })
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
 

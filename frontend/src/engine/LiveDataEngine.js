@@ -64,6 +64,69 @@ class LiveDataEngine {
 
   pushUpdate() { this.updateCallback(this.getState()) }
 
+  async syncFromBackend(backendUrl) {
+    try {
+      const feedRes = await fetch(`${backendUrl}/api/session/live-feed`)
+      if (feedRes.ok) {
+        const feed = await feedRes.json()
+        if (feed.sessions && feed.sessions.length > 0) {
+          feed.sessions.forEach(s => this.updateSession({
+            sessionId: s.sessionId, username: s.username, ip: s.ip,
+            country: s.country, city: s.city, lat: s.lat, lng: s.lng,
+            state: s.state, riskScore: s.riskScore, role: s.role,
+            browser: s.browser, os: s.os, attackTypes: s.attackTypes,
+            attackCount: s.attackCount, inHoney: s.inHoney, lastSeen: s.lastSeen
+          }))
+        }
+        if (feed.attacks && feed.attacks.length > 0) {
+          feed.attacks.forEach(a => this.injectAttackEvent(a))
+        }
+      }
+
+      const honeyRes = await fetch(`${backendUrl}/api/export/honey`, { headers: { 'Accept': 'application/json' } })
+      if (honeyRes.ok) {
+        const hLogs = await honeyRes.json()
+        if (Array.isArray(hLogs) && hLogs.length > 0) {
+          hLogs.forEach(l => this.injectHoneyEvent(l))
+        }
+      }
+
+      const alertsRes = await fetch(`${backendUrl}/api/alerts`)
+      if (alertsRes.ok) {
+        const alerts = await alertsRes.json()
+        if (Array.isArray(alerts) && alerts.length > 0) {
+          alerts.forEach(a => this.injectAlert({
+            id: a.alertId || a.id, severity: a.severity, title: a.title,
+            description: a.description, sessionId: a.sessionId, sourceIP: a.sourceIP,
+            timestamp: a.timestamp, status: a.status
+          }))
+        }
+      }
+
+      const blockRes = await fetch(`${backendUrl}/api/blocklist`)
+      if (blockRes.ok) {
+        const blocked = await blockRes.json()
+        if (Array.isArray(blocked) && blocked.length > 0) {
+          blocked.forEach(b => {
+            this.blockedIPs.add(b.ip)
+            if (!this.blockLog.find(x => x.ip === b.ip)) {
+              this.blockLog.unshift({
+                id: b._id || `BLOCK-${Date.now()}`,
+                ip: b.ip, blockedBy: b.blockedBy || 'admin',
+                reason: b.reason || 'Manual block',
+                blockedAt: b.blockedAt || new Date().toISOString(),
+                permanent: true
+              })
+            }
+          })
+        }
+      }
+      this.pushUpdate()
+    } catch (e) {
+      console.warn('[LiveDataEngine] Backend sync failed:', e.message)
+    }
+  }
+
   registerRealSession(data) {
     this.sessions = this.sessions.filter(s => s.username !== data.username)
     const isAttacker = data.role === 'ATTACKER'
@@ -124,25 +187,21 @@ class LiveDataEngine {
   }
 
   startAttackerAutoTriggers(session) {
-    const timers = [
-      setInterval(() => { if (this.sessions.find(s => s.id === session.id)) this.registerAttackerAction('RECONNAISSANCE') }, 30000),
-      setTimeout(() => { if (this.sessions.find(s => s.id === session.id)) this.registerAttackerAction('SESSION_HIJACKING') }, 120000),
-      setTimeout(() => { if (this.sessions.find(s => s.id === session.id)) this.registerAttackerAction('MAN_IN_THE_MIDDLE') }, 180000),
-      setTimeout(() => { if (this.sessions.find(s => s.id === session.id)) this.registerAttackerAction('INSIDER_THREAT') }, 300000),
-      setInterval(() => { if (this.sessions.find(s => s.id === session.id) && Math.random() < 0.1) this.registerAttackerAction('ZERO_DAY_EXPLOIT') }, 60000)
-    ]
-    this.attackerTimers.push(...timers)
+    // Background auto triggers disabled
   }
 
-  registerAttackerAction(actionType) {
+  registerAttackerAction(actionType, targetSessionId) {
     const attackDef = ATTACK_TYPES[actionType]
     if (!attackDef) return
-    let sessionIdx = this.sessions.findIndex(s => s.role === 'ATTACKER')
+    let sessionIdx = targetSessionId ? this.sessions.findIndex(s => s.id === targetSessionId || s.sessionId === targetSessionId) : -1
+    if (sessionIdx === -1) {
+      sessionIdx = this.sessions.findIndex(s => s.role === 'ATTACKER' || s.username === 'testuser' || s.username !== 'admin')
+    }
     let session
     if (sessionIdx === -1) {
       session = {
-        id: `ATTACKER-${Date.now()}`, ip: '185.220.101.42', country: 'Germany', city: 'Frankfurt',
-        lat: 50.1, lng: 8.6, browser: 'Chrome', os: 'Windows', device: 'Desktop',
+        id: targetSessionId || `ATTACKER-${Date.now()}`, ip: '127.0.0.1', country: 'Localhost', city: 'Localhost',
+        lat: 22.3, lng: 73.1, browser: 'Chrome', os: 'Windows', device: 'Desktop',
         username: 'testuser', role: 'ATTACKER', state: 'ATTACKER', riskScore: 85,
         riskHistory: [], attackTypes: [], attackCount: 0,
         fingerprint: { deviceId: 'auto-001', behaviorSignature: 'Human manual attacker', requestPattern: 'Manual', toolHint: 'Browser' },
@@ -159,15 +218,16 @@ class LiveDataEngine {
       timestamp: new Date().toISOString(),
       sourceIP: session.ip, sourceCountry: session.country, sourceCity: session.city,
       targetArea: attackDef.target, riskDelta: attackDef.riskDelta,
-      sessionId: session.id, correlationId: `CAMP-testuser`
+      sessionId: session.id, correlationId: `CAMP-${session.username}`
     }
     this.attackLog.unshift(event)
     if (this.attackLog.length > 500) this.attackLog.pop()
-    session.riskScore = Math.min(100, session.riskScore + attackDef.riskDelta)
+    session.riskScore = Math.min(100, (session.riskScore || 5) + attackDef.riskDelta)
     session.state = 'ATTACKER'
-    session.attackTypes = [...new Set([...session.attackTypes, attackDef.label])]
+    session.role = 'ATTACKER'
+    session.attackTypes = [...new Set([...(session.attackTypes || []), attackDef.label])]
     session.attackCount = (session.attackCount || 0) + 1
-    session.timeline = [...session.timeline, { timestamp: event.timestamp, action: 'ATTACK', detail: `${attackDef.label} → ${attackDef.target}` }]
+    session.timeline = [...(session.timeline || []), { timestamp: event.timestamp, action: 'ATTACK', detail: `${attackDef.label} → ${attackDef.target}` }]
     const honeyEvent = {
       id: `HONEY-${Date.now()}`, sessionId: session.id, attackerIP: session.ip, attackerCountry: session.country,
       timestamp: event.timestamp,
@@ -178,15 +238,13 @@ class LiveDataEngine {
     this.honeyLog.unshift(honeyEvent)
     if (this.honeyLog.length > 500) this.honeyLog.pop()
     session.honeyInteractions = (session.honeyInteractions || 0) + 1
-    if (['HIGH','CRITICAL'].includes(attackDef.severity)) {
-      this.alertLog.unshift({
-        id: `ALERT-${Date.now()}`, severity: attackDef.severity,
-        title: `${attackDef.label} Detected`,
-        description: `${attackDef.label} from ${session.ip} (${session.country}) targeting ${attackDef.target}`,
-        sessionId: session.id, sourceIP: session.ip, timestamp: event.timestamp, status: 'New'
-      })
-      if (this.alertLog.length > 200) this.alertLog.pop()
-    }
+    this.alertLog.unshift({
+      id: `ALERT-${Date.now()}-${Math.random().toString(36).substr(2,4)}`, severity: attackDef.severity || 'HIGH',
+      title: `${attackDef.label} Detected`,
+      description: `${attackDef.label} attack executed by ${session.username} (${session.ip}) targeting ${attackDef.target}`,
+      sessionId: session.id, sourceIP: session.ip, timestamp: event.timestamp, status: 'New'
+    })
+    if (this.alertLog.length > 200) this.alertLog.pop()
     this.sessions[sessionIdx] = session
     this.pushUpdate()
   }
@@ -205,41 +263,67 @@ class LiveDataEngine {
   }
 
   injectAlert(alert) {
-    if (!this.alertLog.find(a => a.id === alert.id)) {
-      this.alertLog.unshift({ id: alert.id || `ALERT-${Date.now()}`, severity: alert.severity, title: alert.title, description: alert.description, sessionId: alert.sessionId, sourceIP: alert.sourceIP, timestamp: alert.timestamp || new Date().toISOString(), status: 'New' })
+    const alertId = alert.id || alert.alertId || `ALERT-${Date.now()}`
+    if (!this.alertLog.find(a => a.id === alertId || a.alertId === alertId)) {
+      this.alertLog.unshift({
+        id: alertId,
+        alertId,
+        severity: alert.severity || 'HIGH',
+        title: alert.title || 'Threat Detected',
+        description: alert.description || 'Security threat detected in honeypot environment',
+        sessionId: alert.sessionId,
+        sourceIP: alert.sourceIP,
+        timestamp: alert.timestamp || new Date().toISOString(),
+        status: alert.status || 'New'
+      })
       if (this.alertLog.length > 200) this.alertLog.pop()
       this.pushUpdate()
     }
   }
 
   updateSession(sessionData) {
-    const idx = this.sessions.findIndex(s => s.id === sessionData.sessionId || s.username === sessionData.username)
+    if (!sessionData) return
+    const sid = sessionData.sessionId || sessionData.id
+    const idx = this.sessions.findIndex(s => 
+      (sid && (s.id === sid || s.sessionId === sid)) || 
+      (sessionData.username && s.username === sessionData.username)
+    )
     if (idx >= 0) {
+      const existing = this.sessions[idx]
+      const updatedScore = sessionData.riskScore !== undefined ? sessionData.riskScore : existing.riskScore
+      const updatedState = sessionData.state || (updatedScore > 70 ? 'ATTACKER' : sessionData.role === 'ATTACKER' ? 'ATTACKER' : existing.state)
+      const currentHistory = existing.riskHistory || []
+      const newHistory = [...currentHistory, { time: new Date().toLocaleTimeString(), score: updatedScore }].slice(-20)
+
       this.sessions[idx] = {
-        ...this.sessions[idx],
-        state: sessionData.state || this.sessions[idx].state,
-        riskScore: sessionData.riskScore !== undefined ? sessionData.riskScore : this.sessions[idx].riskScore,
-        attackCount: sessionData.attackCount !== undefined ? sessionData.attackCount : this.sessions[idx].attackCount,
-        attackTypes: sessionData.attackTypes || this.sessions[idx].attackTypes,
-        inHoney: sessionData.inHoney !== undefined ? sessionData.inHoney : this.sessions[idx].inHoney,
-        lastSeen: sessionData.lastSeen || new Date().toISOString(),
-        lat: sessionData.lat !== undefined ? sessionData.lat : this.sessions[idx].lat,
-        lng: sessionData.lng !== undefined ? sessionData.lng : this.sessions[idx].lng,
-        country: sessionData.country || this.sessions[idx].country,
-        city: sessionData.city || this.sessions[idx].city,
-        ip: sessionData.ip || this.sessions[idx].ip
+        ...existing,
+        ...sessionData,
+        id: existing.id || sid,
+        sessionId: sid || existing.sessionId,
+        state: updatedState,
+        riskScore: updatedScore,
+        riskHistory: newHistory,
+        attackCount: sessionData.attackCount !== undefined ? sessionData.attackCount : existing.attackCount,
+        attackTypes: sessionData.attackTypes || existing.attackTypes,
+        inHoney: sessionData.inHoney !== undefined ? sessionData.inHoney : existing.inHoney,
+        lastSeen: sessionData.lastSeen || new Date().toISOString()
       }
-    } else if (sessionData.sessionId) {
+    } else if (sid || sessionData.username) {
+      const initScore = sessionData.riskScore !== undefined ? sessionData.riskScore : (sessionData.role === 'ATTACKER' ? 85 : 0)
+      const initState = sessionData.state || (initScore > 70 ? 'ATTACKER' : sessionData.role === 'ATTACKER' ? 'ATTACKER' : 'NORMAL')
       this.sessions.push({
-        id: sessionData.sessionId, username: sessionData.username || 'unknown',
+        id: sid || `SESSION-${sessionData.username}-${Date.now()}`,
+        sessionId: sid || `SESSION-${sessionData.username}`,
+        username: sessionData.username || 'unknown',
         ip: sessionData.ip || 'Unknown', country: sessionData.country || 'Unknown',
         city: sessionData.city || 'Unknown', lat: sessionData.lat || 0, lng: sessionData.lng || 0,
-        state: sessionData.state || 'NORMAL', riskScore: sessionData.riskScore || 0,
-        role: sessionData.role || 'USER', browser: sessionData.browser || 'Unknown', os: sessionData.os || 'Unknown',
+        state: initState, riskScore: initScore,
+        role: sessionData.role || (initState === 'ATTACKER' ? 'ATTACKER' : 'USER'),
+        browser: sessionData.browser || 'Unknown', os: sessionData.os || 'Unknown',
         attackTypes: sessionData.attackTypes || [], attackCount: sessionData.attackCount || 0,
         inHoney: sessionData.inHoney || false, honeyDuration: 0, honeyInteractions: 0,
-        startTime: new Date(), duration: 0, riskHistory: [],
-        fingerprint: { behaviorSignature: 'Authenticated user', toolHint: 'Browser' },
+        startTime: new Date(), duration: 0, riskHistory: [{ time: new Date().toLocaleTimeString(), score: initScore }],
+        fingerprint: { behaviorSignature: 'Authenticated user', toolHint: sessionData.browser || 'Browser' },
         timeline: [], isRealUser: true
       })
     }

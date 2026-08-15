@@ -5,13 +5,22 @@ let client = null
 let isConnected = false
 const memCache = new Map()
 
+let redisAttempted = false
+
 const getClient = async () => {
-  if (!process.env.REDIS_URL || process.env.REDIS_URL === 'mock') {
+  if (!process.env.REDIS_URL || process.env.REDIS_URL === 'mock' || (redisAttempted && !client)) {
     return null
   }
-  if (!client) {
+  if (!client && !redisAttempted) {
+    redisAttempted = true
     try {
-      client = createClient({ url: process.env.REDIS_URL })
+      client = createClient({
+        url: process.env.REDIS_URL,
+        socket: {
+          connectTimeout: 1000,
+          reconnectStrategy: false
+        }
+      })
       client.on('error', err => logger.error(`Redis: ${err.message}`))
       client.on('connect', () => { isConnected = true; logger.info('[REDIS] Connected') })
       client.on('disconnect', () => { isConnected = false })
@@ -82,6 +91,13 @@ export const cache = {
     } catch {
       return 0
     }
+  },
+  async flush() {
+    try {
+      const c = await getClient()
+      if (c) await c.flushAll()
+    } catch {}
+    memCache.clear()
   },
   isConnected: () => isConnected || !process.env.REDIS_URL || process.env.REDIS_URL === 'mock'
 }

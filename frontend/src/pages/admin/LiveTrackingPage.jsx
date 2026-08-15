@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 
-const LiveTrackingPage = ({ data, onBlockIP, backendOnline }) => {
+const LiveTrackingPage = ({ data, onBlockIP, onBlockFingerprint, backendOnline }) => {
   const sessions = data?.sessions || []
   const attackLog = data?.attackLog || []
   const [selectedSession, setSelectedSession] = useState(null)
@@ -71,65 +71,90 @@ const LiveTrackingPage = ({ data, onBlockIP, backendOnline }) => {
           <div style={{ maxHeight:'500px', overflowY:'auto' }}>
             {sessions.length === 0 ? (
               <div style={{ padding:'40px', textAlign:'center', color:'#8B949E', fontSize:'13px' }}>No active sessions</div>
-            ) : sessions.map(s => (
-              <div key={s.id}
-                style={{ padding:'14px 16px', borderBottom:'1px solid #21262D', cursor:'pointer', background: selectedSession?.id === s.id ? '#1C2128' : 'transparent', transition:'background 0.15s', borderLeft:`3px solid ${stateColor[s.state]||'transparent'}` }}
-                onClick={() => setSelectedSession(selectedSession?.id === s.id ? null : s)}>
-                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'6px' }}>
-                  <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
-                    <div style={{ width:'8px', height:'8px', borderRadius:'50%', background:stateColor[s.state]||'#8B949E', boxShadow:`0 0 6px ${stateColor[s.state]}` }} />
-                    <span style={{ color:'#E6EDF3', fontWeight:600, fontSize:'13px' }}>{s.username}</span>
+            ) : sessions.map(s => {
+              const fpHash = s.fingerprintHash || s.fingerprint?.hash || (typeof s.fingerprint === 'string' ? s.fingerprint : null)
+              const rep = s.ipReputation
+
+              return (
+                <div key={s.id || s.sessionId}
+                  style={{ padding:'14px 16px', borderBottom:'1px solid #21262D', cursor:'pointer', background: selectedSession?.id === s.id ? '#1C2128' : 'transparent', transition:'background 0.15s', borderLeft:`3px solid ${stateColor[s.state]||'transparent'}` }}
+                  onClick={() => setSelectedSession(selectedSession?.id === s.id ? null : s)}>
+                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'6px' }}>
+                    <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
+                      <div style={{ width:'8px', height:'8px', borderRadius:'50%', background:stateColor[s.state]||'#8B949E', boxShadow:`0 0 6px ${stateColor[s.state]}` }} />
+                      <span style={{ color:'#E6EDF3', fontWeight:600, fontSize:'13px' }}>{s.username}</span>
+                    </div>
+                    <div style={{ display:'flex', gap:'4px' }}>
+                      {rep?.suspicious && (
+                        <span style={{ padding:'2px 6px', borderRadius:'4px', fontSize:'9px', fontWeight:700, background: rep.reason === 'TOR_EXIT_NODE' ? 'rgba(255,68,68,0.2)' : 'rgba(255,193,7,0.2)', color: rep.reason === 'TOR_EXIT_NODE' ? '#FF4444' : '#FFC107', border: `1px solid ${rep.reason === 'TOR_EXIT_NODE' ? '#FF4444' : '#FFC107'}` }}>
+                          {rep.label || 'VPN/Proxy'}
+                        </span>
+                      )}
+                      <span style={{ padding:'2px 8px', borderRadius:'4px', fontSize:'10px', fontWeight:700, background:`${stateColor[s.state]}22`, color:stateColor[s.state] }}>
+                        {s.state}
+                      </span>
+                    </div>
                   </div>
-                  <span style={{ padding:'2px 8px', borderRadius:'4px', fontSize:'10px', fontWeight:700, background:`${stateColor[s.state]}22`, color:stateColor[s.state] }}>
-                    {s.state}
-                  </span>
-                </div>
 
-                {/* Real IP + Location */}
-                <div style={{ fontFamily:'monospace', fontSize:'12px', color:'#4FC3F7', marginBottom:'3px' }}>{s.ip}</div>
-                <div style={{ fontSize:'11px', color:'#8B949E', marginBottom:'3px' }}>
-                  📍 {s.city}, {s.country}
-                </div>
-                <div style={{ fontSize:'11px', color:'#8B949E', marginBottom:'6px' }}>
-                  🖥 {s.browser} · {s.os}
-                </div>
-
-                {/* Date/Time */}
-                <div style={{ fontSize:'10px', color:'#8B949E', marginBottom:'8px', fontFamily:'monospace' }}>
-                  🕐 Login: {s.startTime ? new Date(s.startTime).toLocaleString('en-GB', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit', second:'2-digit' }) : 'Unknown'}
-                </div>
-
-                {/* Risk score bar */}
-                <div style={{ marginBottom:'8px' }}>
-                  <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'2px' }}>
-                    <span style={{ color:'#8B949E', fontSize:'10px' }}>Risk Score</span>
-                    <span style={{ color:stateColor[s.state], fontSize:'10px', fontWeight:700, fontFamily:'monospace' }}>{s.riskScore}/100</span>
+                  {/* Real IP + Location */}
+                  <div style={{ fontFamily:'monospace', fontSize:'12px', color:'#4FC3F7', marginBottom:'3px' }}>{s.ip}</div>
+                  <div style={{ fontSize:'11px', color:'#8B949E', marginBottom:'3px' }}>
+                    📍 {s.city}, {s.country}
                   </div>
-                  <div style={{ background:'#21262D', borderRadius:'3px', height:'3px' }}>
-                    <div style={{ background:stateColor[s.state], height:'100%', width:`${s.riskScore}%`, borderRadius:'3px', transition:'width 0.5s' }} />
+                  <div style={{ fontSize:'11px', color:'#8B949E', marginBottom:'3px' }}>
+                    🖥 {s.browser} · {s.os}
+                  </div>
+
+                  {/* Fingerprint snippet */}
+                  {fpHash && (
+                    <div style={{ fontSize:'10px', color:'#4FC3F7', fontFamily:'monospace', marginBottom:'6px' }}>
+                      🔑 FP: {fpHash.substr(0,12)}...
+                    </div>
+                  )}
+
+                  {/* Date/Time */}
+                  <div style={{ fontSize:'10px', color:'#8B949E', marginBottom:'8px', fontFamily:'monospace' }}>
+                    🕐 Login: {s.startTime ? new Date(s.startTime).toLocaleString('en-GB', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit', second:'2-digit' }) : 'Unknown'}
+                  </div>
+
+                  {/* Risk score bar */}
+                  <div style={{ marginBottom:'8px' }}>
+                    <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'2px' }}>
+                      <span style={{ color:'#8B949E', fontSize:'10px' }}>Risk Score</span>
+                      <span style={{ color:stateColor[s.state], fontSize:'10px', fontWeight:700, fontFamily:'monospace' }}>{s.riskScore}/100</span>
+                    </div>
+                    <div style={{ background:'#21262D', borderRadius:'3px', height:'3px' }}>
+                      <div style={{ background:stateColor[s.state], height:'100%', width:`${s.riskScore}%`, borderRadius:'3px', transition:'width 0.5s' }} />
+                    </div>
+                  </div>
+
+                  {/* Attack count */}
+                  {(s.attackCount || s.attackTypes?.length) > 0 && (
+                    <div style={{ fontSize:'10px', color:'#FF8C00', marginBottom:'8px' }}>
+                      ⚡ {s.attackCount || s.attackTypes?.length} attack{(s.attackCount || s.attackTypes?.length) > 1 ? 's' : ''} detected
+                    </div>
+                  )}
+
+                  {/* Action buttons */}
+                  <div style={{ display:'flex', gap:'6px' }}>
+                    <button onClick={e => { e.stopPropagation(); onBlockIP(s.ip, `Blocked via Live Tracking by admin — ${s.state} session`) }}
+                      style={{ flex:1, padding:'5px', background:'rgba(255,68,68,0.15)', color:'#FF4444', border:'1px solid rgba(255,68,68,0.3)', borderRadius:'6px', fontSize:'10px', cursor:'pointer', fontWeight:600 }}>
+                      🚫 Block IP
+                    </button>
+                    {fpHash && (
+                      <button onClick={e => { e.stopPropagation(); onBlockFingerprint?.(fpHash, `Fingerprint blocked via Live Tracking — ${s.username}`) }}
+                        style={{ flex:1, padding:'5px', background:'rgba(79,195,247,0.15)', color:'#4FC3F7', border:'1px solid rgba(79,195,247,0.3)', borderRadius:'6px', fontSize:'10px', cursor:'pointer', fontWeight:600 }}>
+                        🔑 Block FP
+                      </button>
+                    )}
+                    <button onClick={e => { e.stopPropagation(); setSelectedSession(s) }}
+                      style={{ flex:1, padding:'5px', background:'#21262D', color:'#E6EDF3', border:'1px solid #30363D', borderRadius:'6px', fontSize:'10px', cursor:'pointer' }}>
+                      👁 Details
+                    </button>
                   </div>
                 </div>
-
-                {/* Attack count */}
-                {(s.attackCount || s.attackTypes?.length) > 0 && (
-                  <div style={{ fontSize:'10px', color:'#FF8C00', marginBottom:'8px' }}>
-                    ⚡ {s.attackCount || s.attackTypes?.length} attack{(s.attackCount || s.attackTypes?.length) > 1 ? 's' : ''} detected
-                  </div>
-                )}
-
-                {/* Action buttons */}
-                <div style={{ display:'flex', gap:'6px' }}>
-                  <button onClick={e => { e.stopPropagation(); onBlockIP(s.ip, `Blocked via Live Tracking by admin — ${s.state} session`) }}
-                    style={{ flex:1, padding:'5px', background:'rgba(255,68,68,0.15)', color:'#FF4444', border:'1px solid rgba(255,68,68,0.3)', borderRadius:'6px', fontSize:'10px', cursor:'pointer', fontWeight:600 }}>
-                    🚫 Block IP
-                  </button>
-                  <button onClick={e => { e.stopPropagation(); setSelectedSession(s) }}
-                    style={{ flex:1, padding:'5px', background:'#21262D', color:'#E6EDF3', border:'1px solid #30363D', borderRadius:'6px', fontSize:'10px', cursor:'pointer' }}>
-                    👁 Details
-                  </button>
-                </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         </div>
 

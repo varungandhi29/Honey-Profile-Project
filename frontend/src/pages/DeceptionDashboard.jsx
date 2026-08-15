@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { LogOut, Folder, Users, Server, FileText, Settings, Download, Search, AlertCircle, Activity, Database } from 'lucide-react';
 import { DECEPTION_NAV, FAKE_FILES, FAKE_EMPLOYEES, FAKE_SERVERS, FAKE_REPORTS, LOG_CONTENT } from '../engine/constants';
+import BlockedScreen from '../components/BlockedScreen';
 
 // ============================================================================
 // FAKE PAGES COMPONENTS
@@ -1134,11 +1135,17 @@ export default function DeceptionDashboard({ currentUser, onLogout, onAttackerAc
   const [activePage, setActivePage] = useState('Dashboard')
   const [toasts, setToasts] = useState([])
   const [modal, setModal] = useState(null) // { type, data }
+  const [isBlocked, setIsBlocked] = useState(false)
+  const [blockedReason, setBlockedReason] = useState(null)
 
-  const triggerAttack = useCallback((actionType) => {
+  const triggerAttack = useCallback(async (actionType) => {
     console.log('[DECEPTION] triggerAttack called:', actionType)
     if (typeof onAttackerAction === 'function') {
-      onAttackerAction(actionType)
+      const res = await onAttackerAction(actionType)
+      if (res?.blocked) {
+        setBlockedReason(res.reason || 'default')
+        setIsBlocked(true)
+      }
     } else {
       console.error('[DECEPTION] onAttackerAction is NOT a function. Type:', typeof onAttackerAction)
     }
@@ -1186,27 +1193,9 @@ export default function DeceptionDashboard({ currentUser, onLogout, onAttackerAc
     }
   }, [triggerAttack])
 
-  // Auto time-based triggers
+  // Auto time-based triggers (disabled so only manual user actions trigger attacks)
   useEffect(() => {
-    const timers = []
-    // Reconnaissance every 30s
-    timers.push(setInterval(() => triggerAttack('RECONNAISSANCE'), 30000))
-    // Session hijacking after 2 min
-    timers.push(setTimeout(() => triggerAttack('SESSION_HIJACKING'), 120000))
-    // MitM after 3 min
-    timers.push(setTimeout(() => triggerAttack('MAN_IN_THE_MIDDLE'), 180000))
-    // Insider threat after 5 min
-    timers.push(setTimeout(() => triggerAttack('INSIDER_THREAT'), 300000))
-    // Zero-day 10% chance every 60s
-    timers.push(setInterval(() => {
-      if (Math.random() < 0.1) triggerAttack('ZERO_DAY_EXPLOIT')
-    }, 60000))
-    // Honey interaction every 15s (passive logging)
-    timers.push(setInterval(() => triggerAttack('HONEY_INTERACTION'), 15000))
-    // Bot activity every 45s
-    timers.push(setInterval(() => triggerAttack('BOT_ACTIVITY'), 45000))
-
-    return () => timers.forEach(t => { clearInterval(t); clearTimeout(t) })
+    // Background automatic attack generation disabled
   }, [triggerAttack])
 
   const renderPage = () => {
@@ -1226,6 +1215,10 @@ export default function DeceptionDashboard({ currentUser, onLogout, onAttackerAc
   const handleSignOut = () => {
     triggerAttack('API_ABUSE')
     onLogout()
+  }
+
+  if (isBlocked) {
+    return <BlockedScreen reason={blockedReason} />
   }
 
   return (

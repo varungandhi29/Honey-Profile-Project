@@ -28,7 +28,13 @@ initBroadcast(io)
 
 app.use(helmet({ contentSecurityPolicy: false }))
 app.use(compression())
-app.use(cors({ origin: process.env.FRONTEND_URL, credentials: true }))
+const allowedOrigins = [process.env.FRONTEND_URL, 'http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:5173'].filter(Boolean)
+app.use(cors({
+  origin: (origin, callback) => {
+    callback(null, true)
+  },
+  credentials: true
+}))
 app.use(express.json({ limit: '10mb' }))
 app.use('/api/', apiLimiter)
 app.use((req, res, next) => { logger.info(`${req.method} ${req.path} — ${req.ip}`); next() })
@@ -44,16 +50,21 @@ app.get('/api/health', async (req, res) => {
   res.json({ status: 'ok', version: '2.0.0', mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected', uptime: process.uptime(), timestamp: new Date().toISOString() })
 })
 
+mongoose.set('bufferCommands', false)
+
 let mongoServer
 let mongoUri = process.env.MONGODB_URI
-
-mongoose.set('bufferCommands', false)
 
 const connectDB = async () => {
   if (!mongoUri || mongoUri === 'mock') {
     try {
       logger.info('[DB] Starting In-Memory MongoDB Server...')
-      mongoServer = await MongoMemoryServer.create()
+      if (mongoServer) {
+        try { await mongoServer.stop() } catch {}
+      }
+      mongoServer = await MongoMemoryServer.create({
+        instance: { dbName: `honeypot_${Date.now()}` }
+      })
       mongoUri = mongoServer.getUri()
       logger.info(`[DB] In-Memory MongoDB Server running at ${mongoUri}`)
     } catch (err) {
@@ -61,17 +72,19 @@ const connectDB = async () => {
     }
   }
 
-  try {
-    await mongoose.connect(mongoUri, {
-      serverSelectionTimeoutMS: 5000
-    })
-    logger.info('[DB] MongoDB connected successfully')
-  } catch (err) {
-    logger.error(`[DB] MongoDB error: ${err.message}`)
-    if (!mongoServer && mongoUri !== 'mock') {
-      logger.warn('[DB] Connection failed. Retrying with In-Memory MongoDB Server...')
-      mongoUri = 'mock'
-      await connectDB()
+  if (mongoUri && mongoUri.startsWith('mongodb')) {
+    try {
+      await mongoose.connect(mongoUri, {
+        serverSelectionTimeoutMS: 2000
+      })
+      logger.info('[DB] MongoDB connected successfully')
+    } catch (err) {
+      logger.error(`[DB] MongoDB error: ${err.message}`)
+      if (!mongoServer && mongoUri !== 'mock') {
+        logger.warn('[DB] Connection failed. Retrying with In-Memory MongoDB Server...')
+        mongoUri = 'mock'
+        await connectDB()
+      }
     }
   }
 }

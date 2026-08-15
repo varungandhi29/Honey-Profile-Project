@@ -11,7 +11,8 @@ const blockedIPSchema = new mongoose.Schema({
   expiresAt:   { type: Date, default: null },
   permanent:   { type: Boolean, default: true },
   lastAttempt: { type: Date, default: null },
-  attemptCount:{ type: Number, default: 0 }
+  attemptCount:{ type: Number, default: 0 },
+  fingerprint: { type: String, default: null, index: true }
 }, { timestamps: true })
 
 export default mongoose.model('BlockedIP', blockedIPSchema)
