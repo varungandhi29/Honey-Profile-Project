@@ -48,6 +48,10 @@ app.use('/api/ai', aiRoutes)
 app.use('/api/blocklist', blocklistRoutes)
 app.use('/api/vault', vaultRoutes)
 
+app.get('/', (req, res) => {
+  res.json({ message: 'HoneyShield Backend API is Running', status: 'ok', version: '2.0.0' })
+})
+
 app.get('/api/health', async (req, res) => {
   res.json({ status: 'ok', version: '2.0.0', mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected', uptime: process.uptime(), timestamp: new Date().toISOString() })
 })
