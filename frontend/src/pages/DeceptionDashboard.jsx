@@ -1218,7 +1218,7 @@ export default function DeceptionDashboard({ currentUser, onLogout, onAttackerAc
   }
 
   if (isBlocked) {
-    return <BlockedScreen reason={blockedReason} />
+    return <BlockedScreen reason={blockedReason} session={currentUser} />
   }
 
   return (

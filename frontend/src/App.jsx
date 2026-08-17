@@ -483,7 +483,13 @@ export default function App() {
     </div>
   )
 
-  if (appBlocked) return <BlockedScreen reason={appBlockedReason} />
+  const currentAttackerSession = data.sessions?.find(s => s.sessionId === sessionIdRef.current) || {
+    ip: '127.0.0.1',
+    username: currentUser?.username,
+    role: currentUser?.role
+  }
+
+  if (appBlocked) return <BlockedScreen reason={appBlockedReason} session={currentAttackerSession} />
   if (!currentUser) return (<><ToastContainer /><LoginPage onLogin={handleLogin} /></>)
   if (currentUser.role === 'ATTACKER') return (<><ToastContainer /><DeceptionDashboard currentUser={currentUser} onLogout={handleLogout} onAttackerAction={handleAttackerAction} /></>)
   return (
