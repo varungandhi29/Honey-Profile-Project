@@ -1,0 +1,29 @@
+{
+  "name": "honeyshield-root",
+  "version": "2.0.0",
+  "type": "module",
+  "main": "backend/server.js",
+  "scripts": {
+    "postinstall": "cd backend && npm install",
+    "build": "cd backend && npm install",
+    "start": "cd backend && node server.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "compression": "^1.7.4",
+    "cors": "^2.8.5",
+    "dayjs": "^1.11.10",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "express-rate-limit": "^7.1.5",
+    "geoip-lite": "^1.4.10",
+    "helmet": "^7.1.0",
+    "mongoose": "^8.0.0",
+    "node-cron": "^3.0.3",
+    "redis": "^4.6.10",
+    "socket.io": "^4.6.1",
+    "ua-parser-js": "^1.0.37",
+    "uuid": "^9.0.0",
+    "winston": "^3.11.0"
+  }
+}
