@@ -1,13 +1,15 @@
 import React, { useState } from 'react';
-import { Download, Ban, Eye, Crosshair } from 'lucide-react';
+import { Download, Ban, Eye, Crosshair, FolderOpen } from 'lucide-react';
 import { LineChart, Line, ResponsiveContainer, YAxis } from 'recharts';
+import EvidenceModal from '../../components/EvidenceModal';
 
-export default function ActiveSessionsPage({ data, settings, engine, onBlockIP }) {
+export default function ActiveSessionsPage({ data, settings, engine, onBlockIP, backendOnline }) {
   const [selectedSessionId, setSelectedSessionId] = useState(null);
+  const [selectedEvidence, setSelectedEvidence] = useState(null);
   const [filter, setFilter] = useState('ALL');
 
   const sessions = data.sessions.filter(s => filter === 'ALL' || s.state === filter).sort((a, b) => b.riskScore - a.riskScore);
-  const selectedSession = data.sessions.find(s => s.id === selectedSessionId);
+  const selectedSession = data.sessions.find(s => s.id === selectedSessionId || s.sessionId === selectedSessionId);
 
   const handleBlockIP = (session) => {
     onBlockIP(session.ip, `Blocked from Active Sessions — state: ${session.state}, risk: ${session.riskScore}`);
@@ -17,25 +19,42 @@ export default function ActiveSessionsPage({ data, settings, engine, onBlockIP }
     engine?.boostSessionRisk(id, 99, 10000);
   };
 
+  const handleClearOldSessions = async () => {
+    // Remove all sessions from frontend engine that are not currently active
+    engine?.clearInactiveSessions();
+    // Call backend to mark old sessions inactive
+    if (backendOnline !== false) {
+      try {
+        await fetch('http://localhost:3001/api/session/clear-inactive', { method: 'POST' });
+      } catch {}
+    }
+  };
+
   return (
-    <div style={{ display: 'flex', gap: '20px', height: '100%' }}>
+    <div style={{ display: 'flex', gap: '20px', height: '100%', position: 'relative' }}>
       
       {/* Sessions List */}
       <div style={{ flex: 2, display: 'flex', flexDirection: 'column', gap: '15px' }}>
-        <div style={{ display: 'flex', gap: '10px' }}>
-          {['ALL', 'NORMAL', 'SUSPICIOUS', 'ATTACKER'].map(f => (
-            <button key={f} onClick={() => setFilter(f)} style={{ padding: '6px 12px', background: filter === f ? '#30363D' : '#161B22', color: filter === f ? '#FFF' : '#8B949E', border: '1px solid #30363D', borderRadius: '20px', cursor: 'pointer', fontSize: '12px' }}>
-              {f}
-            </button>
-          ))}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: '10px' }}>
+            {['ALL', 'NORMAL', 'SUSPICIOUS', 'ATTACKER'].map(f => (
+              <button key={f} onClick={() => setFilter(f)} style={{ padding: '6px 12px', background: filter === f ? '#30363D' : '#161B22', color: filter === f ? '#FFF' : '#8B949E', border: '1px solid #30363D', borderRadius: '20px', cursor: 'pointer', fontSize: '12px' }}>
+                {f}
+              </button>
+            ))}
+          </div>
+          <button onClick={handleClearOldSessions}
+            style={{ padding:'8px 16px', background:'rgba(255,68,68,0.1)', color:'#FF4444', border:'1px solid rgba(255,68,68,0.3)', borderRadius:'8px', fontSize:'12px', cursor:'pointer', fontWeight:600 }}>
+            🗑 Clear Old Sessions
+          </button>
         </div>
 
         <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px' }}>
           {sessions.length > 0 ? sessions.map(s => {
             const isAttacker = s.state === 'ATTACKER';
-            const isSelected = selectedSessionId === s.id;
+            const isSelected = selectedSessionId === s.id || selectedSessionId === s.sessionId;
             return (
-              <div key={s.id} onClick={() => setSelectedSessionId(s.id)} style={{ background: isSelected ? '#21262D' : '#161B22', border: `1px solid ${isAttacker ? 'rgba(255, 68, 68, 0.4)' : '#30363D'}`, borderLeft: isAttacker ? '4px solid #FF4444' : '1px solid #30363D', borderRadius: '8px', padding: '16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '15px' }}>
+              <div key={s.id || s.sessionId} onClick={() => setSelectedSessionId(s.id || s.sessionId)} style={{ background: isSelected ? '#21262D' : '#161B22', border: `1px solid ${isAttacker ? 'rgba(255, 68, 68, 0.4)' : '#30363D'}`, borderLeft: isAttacker ? '4px solid #FF4444' : '1px solid #30363D', borderRadius: '8px', padding: '16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '15px' }}>
                 <div style={{ flex: 1 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
                     <span style={{ fontWeight: 'bold', fontSize: '14px', color: '#FFF' }}>{s.username}</span>
@@ -53,10 +72,16 @@ export default function ActiveSessionsPage({ data, settings, engine, onBlockIP }
                     <div style={{ fontSize: '12px', color: '#8B949E', marginBottom: '4px' }}>Risk Score</div>
                     <div style={{ fontSize: '20px', fontWeight: 'bold', color: isAttacker ? '#FF4444' : '#00FF88' }}>{s.riskScore}</div>
                   </div>
-                  <button onClick={(e) => { e.stopPropagation(); handleBlockIP(s); }}
-                    style={{ padding:'5px 10px', background:'rgba(255,68,68,0.1)', color:'#FF4444', border:'1px solid rgba(255,68,68,0.3)', borderRadius:'6px', fontSize:'11px', cursor:'pointer', fontWeight:600 }}>
-                    🚫 Block IP
-                  </button>
+                  <div style={{ display: 'flex', gap: '6px' }}>
+                    <button onClick={(e) => { e.stopPropagation(); setSelectedEvidence(s.id || s.sessionId); }}
+                      style={{ padding:'5px 12px', background:'rgba(0,212,255,0.1)', color:'#00D4FF', border:'1px solid rgba(0,212,255,0.3)', borderRadius:'6px', fontSize:'11px', cursor:'pointer', display:'flex', alignItems:'center', gap:'4px' }}>
+                      <FolderOpen size={12} /> View Evidence
+                    </button>
+                    <button onClick={(e) => { e.stopPropagation(); handleBlockIP(s); }}
+                      style={{ padding:'5px 10px', background:'rgba(255,68,68,0.1)', color:'#FF4444', border:'1px solid rgba(255,68,68,0.3)', borderRadius:'6px', fontSize:'11px', cursor:'pointer', fontWeight:600 }}>
+                      🚫 Block IP
+                    </button>
+                  </div>
                 </div>
               </div>
             );
@@ -68,13 +93,19 @@ export default function ActiveSessionsPage({ data, settings, engine, onBlockIP }
       <div style={{ flex: 1, background: '#161B22', borderRadius: '12px', border: '1px solid #30363D', padding: '20px', display: 'flex', flexDirection: 'column' }}>
         {selectedSession ? (
           <>
-            <h3 style={{ margin: '0 0 20px', color: '#FFF' }}>Session Details</h3>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+              <h3 style={{ margin: 0, color: '#FFF' }}>Session Details</h3>
+              <button onClick={() => setSelectedEvidence(selectedSession.id || selectedSession.sessionId)}
+                style={{ padding: '6px 12px', background: 'rgba(0, 212, 255, 0.1)', color: '#00D4FF', border: '1px solid rgba(0, 212, 255, 0.3)', borderRadius: '6px', fontSize: '11px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <FolderOpen size={12} /> View Evidence
+              </button>
+            </div>
             
             <div style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
               <button onClick={(e) => { e.stopPropagation(); handleBlockIP(selectedSession); }} style={{ flex: 1, padding: '8px', background: 'rgba(255, 68, 68, 0.1)', color: '#FF4444', border: '1px solid rgba(255, 68, 68, 0.3)', borderRadius: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
                 <Ban size={14} /> Block
               </button>
-              <button onClick={(e) => { e.stopPropagation(); handleForceHoney(selectedSession.id); }} style={{ flex: 1, padding: '8px', background: 'rgba(153, 51, 255, 0.1)', color: '#9933FF', border: '1px solid rgba(153, 51, 255, 0.3)', borderRadius: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+              <button onClick={(e) => { e.stopPropagation(); handleForceHoney(selectedSession.id || selectedSession.sessionId); }} style={{ flex: 1, padding: '8px', background: 'rgba(153, 51, 255, 0.1)', color: '#9933FF', border: '1px solid rgba(153, 51, 255, 0.3)', borderRadius: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
                 <Crosshair size={14} /> Honey Trap
               </button>
             </div>
@@ -104,7 +135,7 @@ export default function ActiveSessionsPage({ data, settings, engine, onBlockIP }
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 {[...(selectedSession.timeline || [])].reverse().map((t, i) => (
                   <div key={i} style={{ fontSize: '12px', padding: '8px', background: '#0D1117', borderRadius: '6px', borderLeft: `2px solid ${t.action === 'ATTACK' ? '#FF4444' : '#00FF88'}` }}>
-                    <div style={{ color: '#8B949E', marginBottom: '4px', fontSize: '10px' }}>{new Date(t.timestamp).toLocaleTimeString()} - {t.action}</div>
+                    <div style={{ color: '#8B949E', marginBottom: '4px', fontSize: '10px' }}>{t.timestamp ? new Date(t.timestamp).toLocaleTimeString() : '---'} - {t.action}</div>
                     <div style={{ color: '#FFF' }}>{t.detail}</div>
                   </div>
                 ))}
@@ -117,6 +148,10 @@ export default function ActiveSessionsPage({ data, settings, engine, onBlockIP }
           </div>
         )}
       </div>
+
+      {selectedEvidence && (
+        <EvidenceModal sessionId={selectedEvidence} onClose={() => setSelectedEvidence(null)} />
+      )}
     </div>
   );
 }

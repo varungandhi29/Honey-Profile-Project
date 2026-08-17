@@ -38,7 +38,7 @@ print(f"CV: {cv.mean()*100:.2f}% ± {cv.std()*100:.2f}%")
 importances = pipeline.named_steps['clf'].feature_importances_
 print("\nFeature Importances:")
 for name,imp in sorted(zip(FEATURE_NAMES,importances),key=lambda x:x[1],reverse=True):
-    print(f"  {name:<25} {'█'*int(imp*50)} {imp:.4f}")
+    print(f"  {name:<25} {'#'*int(imp*50)} {imp:.4f}")
 
 joblib.dump(pipeline,'model.pkl')
-print("\nModel saved → model.pkl")
+print("\nModel saved -> model.pkl")

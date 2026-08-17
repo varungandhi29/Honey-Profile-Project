@@ -24,76 +24,150 @@ router.get('/init', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
-// POST /api/session/register — save real session to MongoDB + Redis
+// POST /api/session/register — save real session to MongoDB + Redis with VPN Auto-Block
 router.post('/register', async (req, res) => {
   try {
     const data = req.body
 
     // Exempt ADMIN accounts
     if (data.role !== 'ADMIN' && data.username !== 'admin') {
-      // 1. Check Fingerprint block FIRST
+      // Check 1: IP blocked in Redis cache
+      if (data.ip) {
+        const cachedBlock = await cache.get(`blocked:${data.ip}`)
+        if (cachedBlock?.blocked) {
+          if (mongoose.connection.readyState === 1) {
+            try {
+              await BlockedIP.findOneAndUpdate(
+                { ip: data.ip },
+                { $inc: { attemptCount: 1 }, lastAttempt: new Date() }
+              )
+            } catch {}
+          }
+          broadcast('blocked_attempt', {
+            ip: data.ip, username: data.username,
+            method: 'IP_BLOCK',
+            message: `Blocked IP ${data.ip} tried to reconnect after refresh`,
+            timestamp: new Date().toISOString()
+          })
+          logger.warn(`[BLOCKED] ${data.ip} tried to register but is already blocked`)
+          return res.status(403).json({ error: 'Blocked', blocked: true, reason: 'IP_BLOCKED' })
+        }
+
+        // Check 2: IP blocked in MongoDB (source of truth)
+        if (mongoose.connection.readyState === 1) {
+          try {
+            const dbBlock = await BlockedIP.findOne({ ip: data.ip })
+            if (dbBlock && (!dbBlock.expiresAt || new Date() < dbBlock.expiresAt)) {
+              await cache.set(`blocked:${data.ip}`, { blocked: true, reason: dbBlock.reason }, 86400 * 365)
+              await BlockedIP.findOneAndUpdate(
+                { ip: data.ip },
+                { $inc: { attemptCount: 1 }, lastAttempt: new Date() }
+              )
+              broadcast('blocked_attempt', {
+                ip: data.ip, username: data.username, method: 'DB_BLOCK',
+                message: `Blocked IP ${data.ip} tried to reconnect (re-cached from DB)`,
+                timestamp: new Date().toISOString()
+              })
+              logger.warn(`[BLOCKED] ${data.ip} found in DB — re-caching and rejecting`)
+              return res.status(403).json({ error: 'Blocked', blocked: true, reason: 'IP_BLOCKED' })
+            }
+          } catch (err) {
+            logger.warn(`[DB BLOCK CHECK ERROR] ${err.message}`)
+          }
+        }
+      }
+
+      // Check 3: Fingerprint blocked
       if (data.fingerprint && typeof data.fingerprint === 'string') {
-        let cachedFp = await cache.get(`blocked:fp:${data.fingerprint}`)
-        let isFpBlocked = cachedFp?.blocked
-        let fpReason = cachedFp?.reason
-        if (!isFpBlocked && mongoose.connection.readyState === 1) {
+        let fpBlock = await cache.get(`blocked:fp:${data.fingerprint}`)
+        if (!fpBlock?.blocked && mongoose.connection.readyState === 1) {
           try {
             const dbFp = await BlockedFingerprint.findOne({ fingerprint: data.fingerprint })
             if (dbFp) {
-              isFpBlocked = true
-              fpReason = dbFp.reason
-              await cache.set(`blocked:fp:${data.fingerprint}`, { blocked: true, reason: dbFp.reason }, 86400 * 365)
+              fpBlock = { blocked: true, reason: dbFp.reason }
+              await cache.set(`blocked:fp:${data.fingerprint}`, fpBlock, 86400 * 365)
             }
           } catch {}
         }
-        if (isFpBlocked) {
-          logger.warn(`[REGISTER BLOCKED] Blocked Fingerprint ${data.fingerprint.substr(0,8)}... (${data.username}) attempted login`)
-          return res.status(403).json({ error: `Device is permanently blocked`, blocked: true, reason: fpReason || 'FINGERPRINT_BLOCKED' })
+        if (fpBlock?.blocked) {
+          if (mongoose.connection.readyState === 1) {
+            try {
+              await BlockedFingerprint.findOneAndUpdate(
+                { fingerprint: data.fingerprint },
+                { $inc: { attemptCount: 1 }, lastAttempt: new Date(), $addToSet: { associatedIPs: data.ip } }
+              )
+            } catch {}
+          }
+          broadcast('blocked_attempt', {
+            ip: data.ip, username: data.username, method: 'FINGERPRINT_BLOCK',
+            message: `Blocked fingerprint tried to reconnect from IP ${data.ip}`,
+            timestamp: new Date().toISOString()
+          })
+          logger.warn(`[BLOCKED] Fingerprint ${data.fingerprint.substr(0,8)}... blocked — new IP ${data.ip}`)
+          return res.status(403).json({ error: 'Blocked', blocked: true, reason: 'FINGERPRINT_BLOCKED' })
         }
       }
 
-      // 2. Check IP block SECOND
-      if (data.ip) {
-        const cached = await cache.get(`blocked:${data.ip}`)
-        let isBlocked = cached?.blocked
-        let blockReason = cached?.reason
-
-        if (!isBlocked && mongoose.connection.readyState === 1) {
-          try {
-            const dbBlocked = await BlockedIP.findOne({ ip: data.ip })
-            if (dbBlocked && (!dbBlocked.expiresAt || new Date() < dbBlocked.expiresAt)) {
-              isBlocked = true
-              blockReason = dbBlocked.reason
-              await cache.set(`blocked:${data.ip}`, { blocked: true, reason: dbBlocked.reason, blockedAt: dbBlocked.blockedAt }, 86400 * 365)
-            }
-          } catch {}
-        }
-
-        if (isBlocked) {
-          logger.warn(`[REGISTER BLOCKED] Blocked IP ${data.ip} (${data.username}) attempted login`)
-          return res.status(403).json({ error: `IP ${data.ip} is permanently blocked`, blocked: true, reason: blockReason || 'IP_BLOCKED' })
-        }
-      }
-
-      // 3. Automatic VPN / Proxy detection check
+      // Check 4: VPN/proxy detection
       if (data.ip) {
         const reputation = checkIPReputation(data.ip)
         if (reputation.suspicious) {
-          logger.warn(`[VPN DETECTED] ${data.ip} flagged as ${reputation.label} — auto-blocking session`)
+          logger.warn(`[VPN AUTO-BLOCK] ${data.ip} detected as ${reputation.label} — auto-blocking`)
+
+          if (mongoose.connection.readyState === 1) {
+            try {
+              await BlockedIP.findOneAndUpdate(
+                { ip: data.ip },
+                {
+                  ip: data.ip,
+                  blockedBy: 'SYSTEM_AUTO',
+                  reason: `Auto-blocked: ${reputation.label} — ${reputation.reason}`,
+                  permanent: true,
+                  country: data.country || 'Unknown',
+                  city: data.city || 'Unknown',
+                  blockedAt: new Date()
+                },
+                { upsert: true, new: true }
+              )
+            } catch (e) {
+              logger.error(`[VPN AUTO-BLOCK DB ERROR] ${e.message}`)
+            }
+          }
+
+          await cache.set(
+            `blocked:${data.ip}`,
+            { blocked: true, reason: `Auto-blocked: ${reputation.label}` },
+            86400 * 365
+          )
+
           broadcast('vpn_detected', {
             ip: data.ip,
             username: data.username,
             label: reputation.label,
             reason: reputation.reason,
+            autoBlocked: true,
             timestamp: new Date().toISOString()
           })
+
+          broadcast('ip_blocked', {
+            ip: data.ip,
+            blockedBy: 'SYSTEM_AUTO',
+            reason: `Auto-blocked: ${reputation.label}`,
+            country: data.country,
+            city: data.city,
+            sessionsTerminated: 0,
+            autoBlock: true,
+            timestamp: new Date().toISOString()
+          })
+
+          logger.info(`[VPN AUTO-BLOCK] ${data.ip} permanently blocked as ${reputation.label}`)
+
           return res.status(403).json({
             error: 'Access denied',
             reason: 'VPN_PROXY_DETECTED',
-            message: 'VPN and proxy connections are not permitted',
             blocked: true,
-            ip: data.ip,
-            label: reputation.label
+            label: reputation.label,
+            message: 'VPN and proxy connections are automatically blocked'
           })
         }
       }
@@ -119,7 +193,9 @@ router.post('/register', async (req, res) => {
           },
           { upsert: true, new: true }
         )
-      } catch {}
+      } catch (err) {
+        logger.warn(`[REGISTER DB SAVE ERROR] ${err.message}`)
+      }
     }
     await cache.set(`session:${data.sessionId}`, {
       sessionId: data.sessionId, username: data.username, role: data.role,
@@ -127,29 +203,71 @@ router.post('/register', async (req, res) => {
       lat: data.lat, lng: data.lng, state: session.state || 'NORMAL', riskScore: session.riskScore || 5
     })
     req.app.get('io').emit('session_registered', session)
+    broadcastSessionUpdate(session)
     logger.info(`[REGISTER] ${data.username} (${data.role}) from ${data.ip} (${data.city}, ${data.country})`)
     res.json({ success: true, session })
   } catch (err) { logger.error(`Register error: ${err.message}`); res.status(500).json({ error: err.message }) }
 })
 
-// POST /api/session/attack — log attack, update risk, AI prediction, broadcast
+// POST /api/session/attack — log attack with permanent block enforcement
 router.post('/attack', async (req, res) => {
   try {
     let { sessionId, username, attackType, attackDef = {}, sourceIP, sourceCountry, sourceCity, sourceLat, sourceLng, fingerprint } = req.body
 
-    // Hard Rule 2: Fingerprint block check MUST happen BEFORE IP block check
-    if (fingerprint) {
-      let fpBlocked = await cache.get(`blocked:fp:${fingerprint}`)
-      if (fpBlocked?.blocked === undefined && mongoose.connection.readyState === 1) {
+    // Check 1: Redis cache (fastest)
+    if (sourceIP) {
+      const cachedBlock = await cache.get(`blocked:${sourceIP}`)
+      if (cachedBlock?.blocked) {
+        if (mongoose.connection.readyState === 1) {
+          try {
+            await BlockedIP.findOneAndUpdate(
+              { ip: sourceIP },
+              { $inc: { attemptCount: 1 }, lastAttempt: new Date() }
+            )
+          } catch {}
+        }
+        broadcast('blocked_attempt', {
+          ip: sourceIP, method: 'CACHED_BLOCK',
+          message: `Blocked IP ${sourceIP} attempted attack`,
+          timestamp: new Date().toISOString()
+        })
+        return res.status(403).json({ error: 'Blocked', blocked: true, reason: 'IP_BLOCKED' })
+      }
+
+      // Check 2: MongoDB (source of truth)
+      if (mongoose.connection.readyState === 1) {
         try {
-          const dbFp = await BlockedFingerprint.findOne({ fingerprint })
-          if (dbFp) {
-            fpBlocked = { blocked: true, reason: dbFp.reason }
-            await cache.set(`blocked:fp:${fingerprint}`, fpBlocked, 86400 * 365)
+          const dbBlock = await BlockedIP.findOne({ ip: sourceIP })
+          if (dbBlock && (!dbBlock.expiresAt || new Date() < dbBlock.expiresAt)) {
+            await cache.set(`blocked:${sourceIP}`, { blocked: true, reason: dbBlock.reason }, 86400 * 365)
+            await BlockedIP.findOneAndUpdate(
+              { ip: sourceIP },
+              { $inc: { attemptCount: 1 }, lastAttempt: new Date() }
+            )
+            broadcast('blocked_attempt', {
+              ip: sourceIP, method: 'DB_BLOCK',
+              message: `Blocked IP ${sourceIP} attempted attack (re-cached)`,
+              timestamp: new Date().toISOString()
+            })
+            return res.status(403).json({ error: 'Blocked', blocked: true, reason: 'IP_BLOCKED' })
           }
         } catch {}
       }
-      if (fpBlocked?.blocked) {
+    }
+
+    // Check 3: Fingerprint block
+    if (fingerprint) {
+      let fpBlock = await cache.get(`blocked:fp:${fingerprint}`)
+      if (fpBlock?.blocked === undefined && mongoose.connection.readyState === 1) {
+        try {
+          const dbFp = await BlockedFingerprint.findOne({ fingerprint })
+          if (dbFp) {
+            fpBlock = { blocked: true, reason: dbFp.reason }
+            await cache.set(`blocked:fp:${fingerprint}`, fpBlock, 86400 * 365)
+          }
+        } catch {}
+      }
+      if (fpBlock?.blocked) {
         if (mongoose.connection.readyState === 1) {
           try {
             await BlockedFingerprint.findOneAndUpdate(
@@ -159,49 +277,38 @@ router.post('/attack', async (req, res) => {
           } catch {}
         }
         broadcast('blocked_attempt', {
-          ip: sourceIP, fingerprint, method: 'FINGERPRINT_BLOCK',
+          ip: sourceIP, fingerprint: fingerprint.substr(0, 8) + '...',
+          method: 'FINGERPRINT_BLOCK',
           message: `Blocked fingerprint attempted from new IP ${sourceIP}`,
           timestamp: new Date().toISOString()
         })
-        logger.warn(`[BLOCKED] Fingerprint ${fingerprint.substr(0,8)}... tried to attack from new IP ${sourceIP}`)
         return res.status(403).json({ error: 'Blocked', blocked: true, reason: 'FINGERPRINT_BLOCKED' })
       }
     }
 
-    // Second: IP Block Check
-    let ipBlocked = await cache.get(`blocked:${sourceIP}`)
-    if (ipBlocked?.blocked === undefined && mongoose.connection.readyState === 1) {
-      try {
-        const dbIp = await BlockedIP.findOne({ ip: sourceIP })
-        if (dbIp && (!dbIp.expiresAt || new Date() < dbIp.expiresAt)) {
-          ipBlocked = { blocked: true, reason: dbIp.reason }
-          await cache.set(`blocked:${sourceIP}`, ipBlocked, 86400 * 365)
-        }
-      } catch {}
-    }
-    if (ipBlocked?.blocked) {
+    // Check 4: Real-time IP reputation on EVERY attack (mid-session auto block if VPN/proxy)
+    const reputation = checkIPReputation(sourceIP)
+    if (reputation.suspicious) {
+      logger.warn(`[VPN ATTACK] ${sourceIP} is ${reputation.label} — auto-blocking mid-session`)
       if (mongoose.connection.readyState === 1) {
         try {
           await BlockedIP.findOneAndUpdate(
             { ip: sourceIP },
-            { $inc: { attemptCount: 1 }, lastAttempt: new Date() }
+            {
+              ip: sourceIP, blockedBy: 'SYSTEM_AUTO',
+              reason: `Auto-blocked during attack: ${reputation.label}`,
+              permanent: true, blockedAt: new Date()
+            },
+            { upsert: true, new: true }
           )
         } catch {}
       }
-      broadcast('blocked_attempt', {
-        ip: sourceIP, method: 'IP_BLOCK',
-        message: `Blocked IP ${sourceIP} attempted to attack`,
-        timestamp: new Date().toISOString()
+      await cache.set(`blocked:${sourceIP}`, { blocked: true }, 86400 * 365)
+      broadcast('vpn_detected', {
+        ip: sourceIP, label: reputation.label,
+        autoBlocked: true, timestamp: new Date().toISOString()
       })
-      logger.warn(`[BLOCKED ATTEMPT] ${sourceIP} tried to attack but is blocked`)
-      return res.status(403).json({ error: 'IP is blocked', blocked: true, reason: 'IP_BLOCKED' })
-    }
-
-    // Hard Rule 4: IP reputation check logs on EVERY attack
-    const reputation = checkIPReputation(sourceIP)
-    if (reputation.suspicious) {
-      logger.info(`[REPUTATION] ${sourceIP} flagged as ${reputation.label} — +${reputation.riskBonus} risk bonus`)
-      attackDef = { ...attackDef, riskDelta: (attackDef.riskDelta || 10) + reputation.riskBonus }
+      return res.status(403).json({ error: 'Blocked', blocked: true, reason: 'VPN_PROXY_DETECTED' })
     }
 
     let session = { sessionId, username: username || 'testuser', role: 'ATTACKER', ip: sourceIP || 'Unknown', riskScore: 85, state: 'ATTACKER' }
@@ -411,6 +518,25 @@ router.delete('/:sessionId', async (req, res) => {
     req.app.get('io').emit('session_removed', { sessionId: req.params.sessionId })
     res.json({ success: true })
   } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+// POST /api/session/clear-inactive — mark sessions older than 2 hours as inactive
+router.post('/clear-inactive', async (req, res) => {
+  try {
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000)
+    let modifiedCount = 0
+    if (mongoose.connection.readyState === 1) {
+      const result = await Session.updateMany(
+        { lastSeen: { $lt: twoHoursAgo }, isActive: true },
+        { isActive: false, logoutTime: new Date() }
+      )
+      modifiedCount = result.modifiedCount
+    }
+    logger.info(`[CLEAR] Marked ${modifiedCount} old sessions inactive`)
+    res.json({ success: true, cleared: modifiedCount })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
 })
 
 // POST /api/session/clear-all — wipe all sessions, attacks, alerts, honey logs

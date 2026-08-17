@@ -4,6 +4,7 @@ import { ATTACK_TYPES, HONEY_TARGET_MAP } from './engine/constants'
 import { useSocket } from './hooks/useSocket'
 import { useNotifications } from './hooks/useNotifications'
 import { generateFingerprint } from './utils/fingerprint'
+import { alertEngine } from './audio/alertEngine'
 import LoginPage from './pages/LoginPage'
 import AdminDashboard from './pages/AdminDashboard'
 import DeceptionDashboard from './pages/DeceptionDashboard'
@@ -16,14 +17,21 @@ export default function App() {
   const [appBlocked, setAppBlocked] = useState(false)
   const [appBlockedReason, setAppBlockedReason] = useState(null)
   const [vpnBlocked, setVpnBlocked] = useState(false)
-  const [vpnIP, setVpnIP] = useState('127.0.0.1')
-  const [vpnLabel, setVpnLabel] = useState('VPN / Proxy IP')
+  const [vpnInfo, setVpnInfo] = useState({ ip: '127.0.0.1', label: 'VPN / Datacenter IP' })
+  const [forceUpdate, setForceUpdate] = useState(0)
   const engineRef = useRef(null)
   const sessionIdRef = useRef(null)
   const [data, setData] = useState({ sessions:[], attackLog:[], honeyLog:[], alertLog:[], autoResponseLog:[] })
   const [backendOnline, setBackendOnline] = useState(false)
   const [aiOnline, setAiOnline] = useState(false)
   const { addToast, ToastContainer, requestPermission, unreadCount } = useNotifications()
+
+  // Initialize audio on first click
+  useEffect(() => {
+    const initAudio = () => { alertEngine.init(); document.removeEventListener('click', initAudio) }
+    document.addEventListener('click', initAudio)
+    return () => document.removeEventListener('click', initAudio)
+  }, [])
 
   // Init engine
   useEffect(() => {
@@ -60,22 +68,42 @@ export default function App() {
     onAttack: (data) => {
       if (data.attack) engineRef.current?.injectAttackEvent(data.attack)
       if (data.session) engineRef.current?.updateSession(data.session)
-      if (data.attack?.severity === 'CRITICAL') addToast(`🚨 CRITICAL: ${data.attack.type} from ${data.attack.sourceIP} (${data.attack.sourceCountry})`, 'critical')
-      else if (data.attack?.severity === 'HIGH') addToast(`⚠️ HIGH: ${data.attack.type} from ${data.attack.sourceCountry}`, 'warning')
+      if (data.attack?.severity === 'CRITICAL') {
+        alertEngine.stopContinuousAlert()
+        alertEngine.startContinuousAlert('CRITICAL', 6000)
+        setForceUpdate(p => p + 1)
+        addToast(`🚨 CRITICAL: ${data.attack.type} from ${data.attack.sourceIP || 'attacker'} (${data.attack.sourceCountry || 'Unknown'})`, 'critical')
+      } else {
+        alertEngine.playBySeverity(data.attack?.severity)
+        if (data.attack?.severity === 'HIGH') addToast(`⚠️ HIGH: ${data.attack.type} from ${data.attack.sourceCountry || 'Unknown'}`, 'warning')
+      }
     },
     onAlert: (data) => {
       if (data.alertId || data.id) engineRef.current?.injectAlert({ id: data.alertId || data.id, severity: data.severity, title: data.title, description: data.description, sessionId: data.sessionId, sourceIP: data.sourceIP, timestamp: data.timestamp, status: data.status || 'New' })
+      alertEngine.playBySeverity(data.severity)
       addToast(`🔔 ${data.severity}: ${data.title}`, data.severity === 'CRITICAL' ? 'critical' : 'warning')
     },
-    onSessionUpdate: (data) => { if (data.sessionId || data.id) engineRef.current?.updateSession(data) },
+    onSessionUpdate: (data) => {
+      if (data.sessionId || data.id) engineRef.current?.updateSession(data)
+      // Start continuous alert when first ATTACKER session appears
+      if ((data.state === 'ATTACKER' || data.role === 'ATTACKER') && !alertEngine.isAlertActive()) {
+        alertEngine.startContinuousAlert('HIGH', 10000)
+        setForceUpdate(p => p + 1)
+        addToast('🚨 ATTACKER IN SYSTEM — Continuous alert active', 'critical')
+      }
+    },
     onHoney: (data) => {
       if (data.log) engineRef.current?.injectHoneyEvent(data.log)
-      if (data.deepTrap) addToast(`🍯 Deep Trap! ${data.session?.ip} has ${data.honeyCount} honey interactions`, 'warning')
+      alertEngine.playHoneyTrap()
+      if (data.deepTrap) addToast(`🍯 Deep Trap! ${data.session?.ip || 'Attacker'} has ${data.honeyCount} honey interactions`, 'warning')
     },
     onAutoResponse: (data) => addToast(`🤖 Auto-response: ${data.action} for ${data.reason}`, 'info'),
     onSessionRemoved: (data) => engineRef.current?.removeSessionById(data.sessionId),
     onSessionBlocked: (data) => {
       engineRef.current?.removeSessionById(data.sessionId);
+      alertEngine.playBlocked()
+      alertEngine.stopContinuousAlert()
+      setForceUpdate(p => p + 1)
       if (currentUserRef.current?.role === 'ATTACKER' || currentUserRef.current?.username === 'testuser') {
         setAppBlockedReason('IP_BLOCKED')
         setAppBlocked(true)
@@ -84,13 +112,19 @@ export default function App() {
       }
     },
     onBlockedAttempt: (data) => {
+      alertEngine.playBlocked()
       if (currentUserRef.current?.role === 'ATTACKER' || currentUserRef.current?.username === 'testuser') {
         setAppBlockedReason('FINGERPRINT_BLOCKED')
         setAppBlocked(true)
+      } else {
+        addToast(`⚠️ Blocked IP ${data.ip} tried to connect again`, 'warning')
       }
     },
     onIPBlocked: (data) => {
       engineRef.current?.blockIP(data.ip, data.blockedBy, data.reason);
+      alertEngine.playBlocked()
+      alertEngine.stopContinuousAlert()
+      setForceUpdate(p => p + 1)
       if (currentUserRef.current?.role === 'ATTACKER' || currentUserRef.current?.username === 'testuser') {
         setAppBlockedReason('IP_BLOCKED')
         setAppBlocked(true)
@@ -99,6 +133,9 @@ export default function App() {
       }
     },
     onFingerprintBlocked: (data) => {
+      alertEngine.playBlocked()
+      alertEngine.stopContinuousAlert()
+      setForceUpdate(p => p + 1)
       if (currentUserRef.current?.role === 'ATTACKER' || currentUserRef.current?.username === 'testuser') {
         setAppBlockedReason('FINGERPRINT_BLOCKED')
         setAppBlocked(true)
@@ -107,14 +144,16 @@ export default function App() {
       }
     },
     onIPUnblocked: (data) => { engineRef.current?.unblockIP(data.ip); addToast(`✅ IP ${data.ip} unblocked`, 'success') },
-    onVPNDetected: (data) => { addToast(`🚨 VPN Detected: ${data.ip} flagged as ${data.label} — session rejected`, 'critical') }
+    onVPNDetected: (data) => {
+      alertEngine.playVPNDetected()
+      addToast(`🚨 VPN AUTO-BLOCKED: ${data.ip} detected as ${data.label}`, 'critical')
+    }
   })
 
   // Get real IP and location
   const getRealLocation = useCallback(async () => {
-    let locData = { ip:'Unknown', country:'Unknown', city:'Unknown', region:'', lat:0, lng:0, timezone:'Unknown', isp:'Unknown', browser:'Browser', os:navigator.platform, device:'Desktop' }
+    let locData = { ip:'127.0.0.1', country:'Unknown', city:'Unknown', region:'', lat:0, lng:0, timezone:'Unknown', isp:'Unknown', browser:'Browser', os:navigator.platform, device:'Desktop' }
     
-    // Get IP and base location via ipapi.co
     try {
       const r = await fetch('https://ipapi.co/json/', { signal: AbortSignal.timeout(5000) });
       const d = await r.json();
@@ -151,7 +190,6 @@ export default function App() {
       } catch {}
     }
 
-    // Refine location using HTML5 GPS/Wi-Fi positioning if available
     if (navigator.geolocation) {
       try {
         const position = await new Promise((resolve, reject) => {
@@ -162,7 +200,6 @@ export default function App() {
           locData.lat = latitude;
           locData.lng = longitude;
 
-          // Call reverse geocoding to get the exact city name
           try {
             const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}`, {
               headers: { 'Accept-Language': 'en', 'User-Agent': 'HoneyShield/2.0' },
@@ -185,105 +222,76 @@ export default function App() {
 
   const handleLogin = useCallback(async (user) => {
     requestPermission()
-    engineRef.current?.syncFromBackend(BACKEND)
-
-    // HARD RULE 1: Generate fingerprint BEFORE login completes
-    const fingerprint = await generateFingerprint()
+    setCurrentUser(user)
+    const location = await getRealLocation()
+    console.log('[LOGIN] Location detected:', location)
+    console.log('[LOGIN] Coordinates:', location?.lat, location?.lng)
 
     const sessionId = `SESSION-${user.username}-${Date.now()}`
     sessionIdRef.current = sessionId
 
     const sessionData = {
       sessionId,
-      fingerprint,
-      ip: '127.0.0.1',
-      country: user.role === 'ADMIN' ? 'India' : 'Local',
-      city: user.role === 'ADMIN' ? 'Vadodara (Local SOC)' : 'Localhost',
-      region: 'Gujarat',
-      lat: user.role === 'ADMIN' ? 22.3 : 0,
-      lng: user.role === 'ADMIN' ? 73.1 : 0,
-      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
-      isp: 'Localhost',
-      browser: navigator.userAgent.includes('Chrome') ? 'Chrome' : 'Browser',
-      os: navigator.platform.includes('Win') ? 'Windows' : 'OS',
-      device: 'Desktop',
+      ip: location.ip || '127.0.0.1',
+      country: location.country || (user.role === 'ADMIN' ? 'India' : 'Local'),
+      city: location.city || (user.role === 'ADMIN' ? 'Vadodara (Local SOC)' : 'Localhost'),
+      region: location.region || '',
+      lat: parseFloat(location.lat) || (user.role === 'ADMIN' ? 22.3 : 0),   // ensure number not string
+      lng: parseFloat(location.lng) || (user.role === 'ADMIN' ? 73.1 : 0),   // ensure number not string
+      timezone: location.timezone || 'Unknown',
+      isp: location.isp || 'Unknown',
+      browser: location.browser || 'Browser',
+      os: location.os || 'Unknown',
+      device: location.device || 'Desktop',
       username: user.username,
-      role: user.role
+      role: user.role,
+      fingerprint: await generateFingerprint()
     }
 
-    // ADMIN users are always exempt from IP blocks
-    if (user.role === 'ADMIN' || user.username === 'admin') {
-      setCurrentUser(user)
-      addToast(`Welcome ${user.username}!`, 'success')
-      engineRef.current?.registerRealSession(sessionData)
-      if (backendOnline) {
-        fetch(`${BACKEND}/api/session/register`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(sessionData)
-        }).catch(() => {})
-      }
-      return
-    }
+    console.log('[LOGIN] SessionData lat/lng:', sessionData.lat, sessionData.lng)
 
     if (backendOnline) {
       try {
-        const regRes = await fetch(`${BACKEND}/api/session/register`, {
+        const res = await fetch(`${BACKEND}/api/session/register`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(sessionData)
         })
-        const regData = await regRes.json()
-        if (regRes.status === 403 || regData.blocked) {
-          if (regData.reason === 'VPN_PROXY_DETECTED') {
-            setVpnBlocked(true)
-            setVpnIP(regData.ip || sessionData.ip || '127.0.0.1')
-            setVpnLabel(regData.label || 'VPN / Datacenter IP')
-            setCurrentUser(null)
-            return
-          }
-          addToast(`🚫 ACCESS DENIED: ${regData.error || 'Device or IP is blocked'}`, 'critical')
-          setAppBlockedReason(regData.reason || 'FINGERPRINT_BLOCKED')
-          setAppBlocked(true)
-          setCurrentUser(user)
+        const data = await res.json()
+
+        // Handle ALL block types at login
+        if (res.status === 403 || data.blocked) {
+          setCurrentUser(null)
           sessionIdRef.current = null
+          engineRef.current?.removeSession(user.username)
+
+          if (data.reason === 'VPN_PROXY_DETECTED') {
+            setVpnInfo({ ip: sessionData.ip, label: data.label || 'VPN/Proxy' })
+            setVpnBlocked(true)
+            alertEngine.playVPNDetected()
+          } else if (data.reason === 'IP_BLOCKED' || data.reason === 'FINGERPRINT_BLOCKED') {
+            setVpnInfo({ ip: sessionData.ip, label: 'Previously Blocked — Access Denied' })
+            setVpnBlocked(true)
+            alertEngine.playCritical()
+          } else {
+            setAppBlockedReason(data.reason || 'IP_BLOCKED')
+            setAppBlocked(true)
+          }
           return
         }
-      } catch (e) { console.warn('[LOGIN] Backend registration check error:', e.message) }
-    }
 
-    setCurrentUser(user)
-    addToast(`Welcome ${user.username}!`, 'success')
-    engineRef.current?.registerRealSession(sessionData)
-
-    // Enhance location in background if available
-    getRealLocation().then(async (location) => {
-      if (location && location.ip && location.ip !== 'Unknown') {
-        const updated = { ...sessionData, ...location }
-
-        // Check if real IP is blocked
-        if (backendOnline) {
-          try {
-            const checkRes = await fetch(`${BACKEND}/api/blocklist/check/${encodeURIComponent(location.ip)}`)
-            const checkData = await checkRes.json()
-            if (checkData.blocked) {
-              addToast(`🚫 ACCESS DENIED: Your IP (${location.ip}) is permanently blocked by administration.`, 'critical')
-              engineRef.current?.blockIP(location.ip, 'admin', checkData.reason || 'Blocked IP')
-              setCurrentUser(null)
-              sessionIdRef.current = null
-              return
-            }
-          } catch {}
-
-          fetch(`${BACKEND}/api/session/register`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(updated)
-          }).catch(() => {})
-        }
-        engineRef.current?.registerRealSession(updated)
+        // Success — register in engine
+        engineRef.current?.registerRealSession(sessionData)
+        addToast(`Welcome ${user.username}!`, 'success')
+      } catch (e) {
+        console.warn('[LOGIN] Backend registration failed:', e.message)
+        engineRef.current?.registerRealSession(sessionData)
+        addToast(`Welcome ${user.username}!`, 'success')
       }
-    })
+    } else {
+      engineRef.current?.registerRealSession(sessionData)
+      addToast(`Welcome ${user.username}!`, 'success')
+    }
   }, [backendOnline, getRealLocation, addToast, requestPermission])
 
   const handleLogout = useCallback(async () => {
@@ -293,11 +301,15 @@ export default function App() {
     engineRef.current?.removeSession(currentUser?.username)
     setCurrentUser(null)
     sessionIdRef.current = null
+    alertEngine.stopContinuousAlert()
+    setForceUpdate(p => p + 1)
   }, [backendOnline, currentUser])
 
-  // Block IP handler — called from admin dashboard
   const handleBlockIP = useCallback(async (ip, reason = 'Manual block by admin') => {
     engineRef.current?.blockIP(ip, currentUser?.username, reason)
+    alertEngine.playBlocked()
+    alertEngine.stopContinuousAlert()
+    setForceUpdate(p => p + 1)
 
     if (backendOnline) {
       try {
@@ -311,17 +323,16 @@ export default function App() {
         })
         const data = await res.json()
         if (data.success) {
-          addToast(`🚫 IP ${ip} permanently blocked — ${data.sessionsTerminated} session(s) terminated`, 'warning')
+          addToast(`🚫 IP ${ip} permanently blocked — alert cleared (${data.sessionsTerminated} session(s) terminated)`, 'warning')
         }
       } catch (e) {
-        addToast(`🚫 IP ${ip} blocked locally`, 'warning')
+        addToast(`🚫 IP ${ip} blocked locally — alert cleared`, 'warning')
       }
     } else {
-      addToast(`🚫 IP ${ip} blocked`, 'warning')
+      addToast(`🚫 IP ${ip} blocked — alert cleared`, 'warning')
     }
   }, [backendOnline, currentUser, addToast])
 
-  // Unblock IP handler
   const handleUnblockIP = useCallback(async (ip) => {
     engineRef.current?.unblockIP(ip)
     if (backendOnline) {
@@ -332,9 +343,11 @@ export default function App() {
     }
   }, [backendOnline, addToast])
 
-  // Block Fingerprint handler
   const handleBlockFingerprint = useCallback(async (fingerprint, reason = 'Manual block by admin') => {
     if (!fingerprint) return
+    alertEngine.playBlocked()
+    alertEngine.stopContinuousAlert()
+    setForceUpdate(p => p + 1)
     if (backendOnline) {
       try {
         const res = await fetch(`${BACKEND}/api/blocklist/fingerprint`, {
@@ -357,7 +370,6 @@ export default function App() {
     }
   }, [backendOnline, currentUser, addToast])
 
-  // Unblock Fingerprint handler
   const handleUnblockFingerprint = useCallback(async (fingerprint) => {
     if (!fingerprint) return
     if (backendOnline) {
@@ -368,7 +380,6 @@ export default function App() {
     }
   }, [backendOnline, addToast])
 
-  // Heartbeat tracking
   useEffect(() => {
     if (!currentUser || !backendOnline) return
     const sendHeartbeat = async () => {
@@ -449,15 +460,26 @@ export default function App() {
   }, [backendOnline, currentUser, handleLogout, addToast])
 
   if (vpnBlocked) return (
-    <div style={{ position: 'fixed', inset: 0, background: '#0D0000', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
-      <div style={{ fontSize: '64px', marginBottom: '24px' }}>🛡️</div>
-      <h1 style={{ color: '#FF4444', fontSize: '28px', fontWeight: 800, marginBottom: '16px', fontFamily: 'monospace' }}>VPN / PROXY DETECTED</h1>
-      <p style={{ color: '#FF8888', fontSize: '15px', maxWidth: '480px', textAlign: 'center', lineHeight: 1.7 }}>
-        Your connection has been identified as originating from a VPN, proxy, or datacenter IP address. Access to this system requires a direct connection. This attempt has been logged.
-      </p>
-      <div style={{ marginTop: '24px', padding: '14px 24px', background: '#1A0000', border: '1px solid #FF4444', borderRadius: '8px', color: '#FF4444', fontSize: '12px', fontFamily: 'monospace' }}>
-        IP: {vpnIP} — Flagged as: {vpnLabel}
+    <div style={{ position:'fixed', inset:0, background:'#050008', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', zIndex:9999 }}>
+      <div style={{ fontSize:'72px', marginBottom:'24px', animation:'pulse 1s infinite' }}>🛡️</div>
+      <h1 style={{ color:'#FF4444', fontSize:'32px', fontWeight:900, marginBottom:'16px', fontFamily:'monospace', textAlign:'center' }}>
+        CONNECTION BLOCKED
+      </h1>
+      <div style={{ padding:'8px 20px', background:'rgba(255,68,68,0.15)', border:'1px solid #FF4444', borderRadius:'6px', marginBottom:'20px' }}>
+        <span style={{ color:'#FF4444', fontSize:'14px', fontWeight:700 }}>{vpnInfo.label || 'VPN/Proxy'} DETECTED</span>
       </div>
+      <p style={{ color:'#FF8888', fontSize:'15px', maxWidth:'480px', textAlign:'center', lineHeight:1.8, marginBottom:'24px' }}>
+        Your connection has been identified as a VPN, proxy, or datacenter IP.
+        Access is automatically denied and your IP has been permanently blocked.
+        This attempt has been logged with timestamp and reported to the administrator.
+      </p>
+      <div style={{ padding:'16px 24px', background:'rgba(255,68,68,0.08)', border:'1px solid rgba(255,68,68,0.3)', borderRadius:'8px', fontFamily:'monospace', fontSize:'13px', color:'#FF6666', textAlign:'center' }}>
+        <div>IP Address: {vpnInfo.ip}</div>
+        <div>Flagged As: {vpnInfo.label}</div>
+        <div>Time: {new Date().toLocaleString()}</div>
+        <div style={{ marginTop:'8px', color:'#FF4444', fontWeight:700 }}>This incident has been permanently logged</div>
+      </div>
+      <style>{`@keyframes pulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.05)} }`}</style>
     </div>
   )
 

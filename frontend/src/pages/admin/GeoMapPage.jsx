@@ -378,6 +378,14 @@ export default function GeoMapPage({ data, onBlockIP }) {
     });
   }, [data.sessions, sevFilter]);
 
+  // Session update logging for GeoMap
+  useEffect(() => {
+    console.log('[GeoMap] Sessions updated:', data.sessions?.length, 'sessions')
+    data.sessions?.forEach(s => {
+      console.log(`[GeoMap] Session: ${s.username} at [${s.lat}, ${s.lng}]`)
+    })
+  }, [data.sessions?.length, data.sessions]);
+
   // Active Attack Lines for 2D Map (Guaranteed Live Attack Lines)
   useEffect(() => {
     const attacks = data.attackLog || [];
@@ -540,6 +548,7 @@ export default function GeoMapPage({ data, onBlockIP }) {
         {/* 3D GLOBE VIEW */}
         {viewMode === '3D' && (
           <CyberGlobe3D
+            key={`globe-${data.sessions?.length}-${data.sessions?.map(s => s.id || s.sessionId).join(',')}`}
             sessions={filteredSessions}
             attacks={data.attackLog || []}
             onSelectSession={setSelectedSession}
@@ -556,7 +565,9 @@ export default function GeoMapPage({ data, onBlockIP }) {
               <button onClick={handleReset} style={{ width: '32px', height: '32px', background: '#161B22', color: '#FFF', border: '1px solid #30363D', borderRadius: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><RefreshCcw size={14} /></button>
             </div>
 
-            <ComposableMap projection="geoNaturalEarth1" width={800} height={400} style={{ width: '100%', height: '100%' }}>
+            <ComposableMap 
+              key={`map-${data.sessions?.length}-${data.sessions?.map(s => s.id || s.sessionId).join(',')}`}
+              projection="geoNaturalEarth1" width={800} height={400} style={{ width: '100%', height: '100%' }}>
               <ZoomableGroup zoom={position.zoom} center={position.coordinates} onMoveEnd={setPosition}>
                 <Graticule stroke="rgba(0, 229, 255, 0.1)" />
                 

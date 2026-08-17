@@ -15,6 +15,7 @@ import exportRoutes from './routes/export.js'
 import analyticsRoutes from './routes/analytics.js'
 import aiRoutes from './routes/ai.js'
 import blocklistRoutes from './routes/blocklist.js'
+import vaultRoutes from './routes/vault.js'
 import { apiLimiter } from './middleware/rateLimit.js'
 import logger from './middleware/logger.js'
 import Session from './models/Session.js'
@@ -45,6 +46,7 @@ app.use('/api/export', exportRoutes)
 app.use('/api/analytics', analyticsRoutes)
 app.use('/api/ai', aiRoutes)
 app.use('/api/blocklist', blocklistRoutes)
+app.use('/api/vault', vaultRoutes)
 
 app.get('/api/health', async (req, res) => {
   res.json({ status: 'ok', version: '2.0.0', mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected', uptime: process.uptime(), timestamp: new Date().toISOString() })
@@ -90,6 +92,23 @@ const connectDB = async () => {
 }
 
 connectDB()
+
+mongoose.connection.once('open', async () => {
+  logger.info('[DB] MongoDB connected')
+  // Clear stale sessions from previous runs
+  const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000)
+  try {
+    const cleared = await Session.updateMany(
+      { lastSeen: { $lt: twoHoursAgo }, isActive: true },
+      { isActive: false, logoutTime: new Date() }
+    )
+    if (cleared.modifiedCount > 0) {
+      logger.info(`[STARTUP] Auto-cleared ${cleared.modifiedCount} stale sessions`)
+    }
+  } catch (e) {
+    logger.warn(`[STARTUP] Error auto-clearing stale sessions: ${e.message}`)
+  }
+})
 
 mongoose.connection.on('disconnected', () => logger.warn('[DB] MongoDB disconnected'))
 mongoose.connection.on('reconnected', () => logger.info('[DB] MongoDB reconnected'))

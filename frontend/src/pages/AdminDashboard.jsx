@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Shield, LogOut, Download, AlertTriangle, Activity, Database, CheckCircle, XCircle } from 'lucide-react';
 import { ADMIN_NAV, USER_NAV } from '../engine/constants';
+import { alertEngine } from '../audio/alertEngine';
 import OverviewPage from './admin/OverviewPage';
 import ActiveSessionsPage from './admin/ActiveSessionsPage';
 import AttackIntelligencePage from './admin/AttackIntelligencePage';
@@ -56,6 +57,7 @@ export default function AdminDashboard({ currentUser, onLogout, data, engineRef,
   const [activePage, setActivePage] = useState('Overview');
   const [time, setTime] = useState(new Date());
   const [showExport, setShowExport] = useState(false);
+  const [forceUpdate, setForceUpdate] = useState(0);
   
   const [settings, setSettings] = useState({
     suspiciousThreshold: 36, attackerThreshold: 70,
@@ -101,7 +103,7 @@ export default function AdminDashboard({ currentUser, onLogout, data, engineRef,
 
     switch (activePage) {
       case 'Overview': return <OverviewPage data={safeData} engineRef={engineRef} currentUser={currentUser} />;
-      case 'Active Sessions': return <ActiveSessionsPage data={safeData} settings={settings} engine={engineRef.current} onBlockIP={onBlockIP} />;
+      case 'Active Sessions': return <ActiveSessionsPage data={safeData} settings={settings} engine={engineRef.current} onBlockIP={onBlockIP} backendOnline={backendOnline} />;
       case 'Attack Intelligence': return <AttackIntelligencePage data={safeData} settings={settings} onBlockIP={onBlockIP} />;
       case 'Honey Activity': return <HoneyActivityPage data={safeData} />;
       case 'Geo Map': return <GeoMapPage data={safeData} onBlockIP={onBlockIP} />;
@@ -112,7 +114,7 @@ export default function AdminDashboard({ currentUser, onLogout, data, engineRef,
       case 'Data Vault': return <DataVaultPage data={safeData} currentUser={currentUser} />;
       case 'Live Tracking': return <LiveTrackingPage data={safeData} onBlockIP={onBlockIP} onBlockFingerprint={onBlockFingerprint} backendOnline={backendOnline} />;
       case 'Blocked IPs': return <BlockedIPsPage data={safeData} onBlockIP={onBlockIP} onUnblockIP={onUnblockIP} onBlockFingerprint={onBlockFingerprint} onUnblockFingerprint={onUnblockFingerprint} backendOnline={backendOnline} />;
-      case 'Settings': return <SettingsPage settings={settings} setSettings={setSettings} data={safeData} />;
+      case 'Settings': return <SettingsPage settings={settings} setSettings={setSettings} data={safeData} backendOnline={backendOnline} />;
       default: return <div>Page not found</div>;
     }
   };
@@ -216,6 +218,12 @@ export default function AdminDashboard({ currentUser, onLogout, data, engineRef,
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+            {alertEngine.isAlertActive() && (
+              <button onClick={() => { alertEngine.stopContinuousAlert(); setForceUpdate(p => p + 1); }}
+                style={{ padding:'6px 14px', background:'rgba(255,68,68,0.2)', color:'#FF4444', border:'1px solid #FF4444', borderRadius:'6px', fontSize:'11px', cursor:'pointer', fontWeight:700, animation:'pulse 1s infinite' }}>
+                🔕 Stop Alert
+              </button>
+            )}
             <span style={{ color: '#8B949E', fontSize: '14px', fontFamily: 'monospace' }}>
               {time.toLocaleTimeString()}
             </span>

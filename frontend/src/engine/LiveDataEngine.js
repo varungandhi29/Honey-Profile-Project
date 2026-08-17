@@ -127,17 +127,55 @@ class LiveDataEngine {
     }
   }
 
+  clearInactiveSessions() {
+    // Keep only sessions that logged in within last 2 hours
+    const twoHoursAgo = Date.now() - (2 * 60 * 60 * 1000)
+    const before = this.sessions.length
+    this.sessions = this.sessions.filter(s => {
+      const loginTime = s.startTime ? new Date(s.startTime).getTime() : 0
+      return loginTime > twoHoursAgo
+    })
+    console.log(`[Engine] Cleared ${before - this.sessions.length} old sessions`)
+    this.pushUpdate()
+  }
+
   registerRealSession(data) {
     this.sessions = this.sessions.filter(s => s.username !== data.username)
     const isAttacker = data.role === 'ATTACKER'
+
+    // CRITICAL: If lat/lng are 0,0 or missing, use country centroid
+    const COUNTRY_CENTROIDS = {
+      'India': [20.5937, 78.9629],
+      'United States': [37.0902, -95.7129],
+      'Germany': [51.1657, 10.4515],
+      'China': [35.8617, 104.1954],
+      'Russia': [61.5240, 105.3188],
+      'United Kingdom': [55.3781, -3.4360],
+      'France': [46.2276, 2.2137],
+      'Brazil': [-14.2350, -51.9253],
+      'Unknown': [0, 0]
+    }
+
+    let lat = parseFloat(data.lat)
+    let lng = parseFloat(data.lng)
+
+    // If lat/lng are 0 or missing, use country centroid
+    if (!lat || !lng || (lat === 0 && lng === 0) || isNaN(lat) || isNaN(lng)) {
+      const centroid = COUNTRY_CENTROIDS[data.country] || (isAttacker ? [51.1657, 10.4515] : [20.5937, 78.9629])
+      lat = centroid[0]
+      lng = centroid[1]
+      console.log(`[Engine] No coordinates for ${data.username} — using ${data.country} centroid [${lat}, ${lng}]`)
+    }
+
     const session = {
       id: data.sessionId || `SESSION-${data.username}-${Date.now()}`,
+      sessionId: data.sessionId || `SESSION-${data.username}`,
       ip: data.ip || 'Unknown',
       country: data.country || 'Unknown',
       city: data.city || 'Unknown',
       region: data.region || '',
-      lat: data.lat !== undefined ? data.lat : 0,
-      lng: data.lng !== undefined ? data.lng : 0,
+      lat,
+      lng,
       timezone: data.timezone || 'Unknown',
       isp: data.isp || 'Unknown',
       browser: data.browser || 'Browser',
@@ -183,7 +221,7 @@ class LiveDataEngine {
       }
     }, 5000)
     this.intervals.push(durationInterval)
-    this.pushUpdate()
+    this.pushUpdate() // This triggers React re-render including GeoMap
   }
 
   startAttackerAutoTriggers(session) {

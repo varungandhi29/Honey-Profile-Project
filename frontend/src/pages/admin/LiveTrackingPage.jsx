@@ -12,11 +12,11 @@ const LiveTrackingPage = ({ data, onBlockIP, onBlockFingerprint, backendOnline }
     if (feedRef.current) feedRef.current.scrollTop = 0
   }, [liveEvents])
 
-  // Build live event feed from attack + honey logs
+  // Build live event feed from attack + honey + auto-response logs
   useEffect(() => {
     const events = [
       ...attackLog.slice(0,50).map(a => ({
-        id: a.id || a.attackId || Math.random().toString(), type: 'ATTACK', severity: a.severity,
+        id: a.id || a.attackId || Math.random().toString(), type: 'ATTACK', severity: a.severity || 'HIGH',
         message: `${a.type} from ${a.sourceIP} (${a.sourceCountry}) → ${a.targetArea}`,
         ip: a.sourceIP, country: a.sourceCountry,
         timestamp: a.timestamp, sessionId: a.sessionId
@@ -26,18 +26,24 @@ const LiveTrackingPage = ({ data, onBlockIP, onBlockFingerprint, backendOnline }
         message: `${h.action} → ${h.fakeTarget} by ${h.attackerIP}`,
         ip: h.attackerIP, country: h.attackerCountry,
         timestamp: h.timestamp, sessionId: h.sessionId
+      })),
+      ...(data?.autoResponseLog || []).slice(0,20).map(ar => ({
+        id: ar.id || Math.random().toString(), type: ar.type || 'AUTO_BLOCKED', severity: 'CRITICAL',
+        message: ar.message || `Auto-response: ${ar.action} for ${ar.reason}`,
+        ip: ar.ip || 'Unknown', label: ar.label || 'VPN / Datacenter IP',
+        timestamp: ar.timestamp || new Date().toISOString()
       }))
     ].sort((a,b) => new Date(b.timestamp) - new Date(a.timestamp)).slice(0,60)
     setLiveEvents(events)
-  }, [attackLog.length, data?.honeyLog?.length])
+  }, [attackLog.length, data?.honeyLog?.length, data?.autoResponseLog?.length])
 
   const stateColor = { ATTACKER:'#FF4444', SUSPICIOUS:'#FFC107', NORMAL:'#00FF88' }
   const severityColor = { CRITICAL:'#FF4444', HIGH:'#FF8C00', MEDIUM:'#FFC107', LOW:'#8B949E' }
-  const typeIcon = { ATTACK:'⚡', HONEY:'🍯', LOGIN:'🔑', LOGOUT:'👋', HEARTBEAT:'💓' }
+  const typeIcon = { ATTACK:'⚡', HONEY:'🍯', LOGIN:'🔑', LOGOUT:'👋', HEARTBEAT:'💓', VPN_DETECTED:'🚨', AUTO_BLOCKED:'🤖', BLOCKED_ATTEMPT:'🚫' }
 
   const getTimeDiff = (timestamp) => {
     const diff = Date.now() - new Date(timestamp).getTime()
-    if (diff < 60000) return `${Math.floor(diff/1000)}s ago`
+    if (diff < 60000) return `${Math.max(0, Math.floor(diff/1000))}s ago`
     if (diff < 3600000) return `${Math.floor(diff/60000)}m ago`
     return `${Math.floor(diff/3600000)}h ago`
   }
@@ -96,7 +102,6 @@ const LiveTrackingPage = ({ data, onBlockIP, onBlockFingerprint, backendOnline }
                     </div>
                   </div>
 
-                  {/* Real IP + Location */}
                   <div style={{ fontFamily:'monospace', fontSize:'12px', color:'#4FC3F7', marginBottom:'3px' }}>{s.ip}</div>
                   <div style={{ fontSize:'11px', color:'#8B949E', marginBottom:'3px' }}>
                     📍 {s.city}, {s.country}
@@ -105,19 +110,16 @@ const LiveTrackingPage = ({ data, onBlockIP, onBlockFingerprint, backendOnline }
                     🖥 {s.browser} · {s.os}
                   </div>
 
-                  {/* Fingerprint snippet */}
                   {fpHash && (
                     <div style={{ fontSize:'10px', color:'#4FC3F7', fontFamily:'monospace', marginBottom:'6px' }}>
                       🔑 FP: {fpHash.substr(0,12)}...
                     </div>
                   )}
 
-                  {/* Date/Time */}
                   <div style={{ fontSize:'10px', color:'#8B949E', marginBottom:'8px', fontFamily:'monospace' }}>
                     🕐 Login: {s.startTime ? new Date(s.startTime).toLocaleString('en-GB', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit', second:'2-digit' }) : 'Unknown'}
                   </div>
 
-                  {/* Risk score bar */}
                   <div style={{ marginBottom:'8px' }}>
                     <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'2px' }}>
                       <span style={{ color:'#8B949E', fontSize:'10px' }}>Risk Score</span>
@@ -128,14 +130,12 @@ const LiveTrackingPage = ({ data, onBlockIP, onBlockFingerprint, backendOnline }
                     </div>
                   </div>
 
-                  {/* Attack count */}
                   {(s.attackCount || s.attackTypes?.length) > 0 && (
                     <div style={{ fontSize:'10px', color:'#FF8C00', marginBottom:'8px' }}>
                       ⚡ {s.attackCount || s.attackTypes?.length} attack{(s.attackCount || s.attackTypes?.length) > 1 ? 's' : ''} detected
                     </div>
                   )}
 
-                  {/* Action buttons */}
                   <div style={{ display:'flex', gap:'6px' }}>
                     <button onClick={e => { e.stopPropagation(); onBlockIP(s.ip, `Blocked via Live Tracking by admin — ${s.state} session`) }}
                       style={{ flex:1, padding:'5px', background:'rgba(255,68,68,0.15)', color:'#FF4444', border:'1px solid rgba(255,68,68,0.3)', borderRadius:'6px', fontSize:'10px', cursor:'pointer', fontWeight:600 }}>
@@ -173,26 +173,41 @@ const LiveTrackingPage = ({ data, onBlockIP, onBlockFingerprint, backendOnline }
                 <div style={{ fontSize:'28px', marginBottom:'8px' }}>📡</div>
                 <div style={{ fontSize:'13px' }}>Waiting for events...</div>
               </div>
-            ) : liveEvents.map((event, i) => (
-              <div key={event.id || i}
-                style={{ padding:'10px 14px', borderBottom:'1px solid #21262D', display:'flex', gap:'10px', alignItems:'flex-start' }}>
-                <div style={{ fontSize:'14px', flexShrink:0, marginTop:'1px' }}>{typeIcon[event.type] || '●'}</div>
-                <div style={{ flex:1, minWidth:0 }}>
-                  <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'2px' }}>
-                    <span style={{ color:severityColor[event.severity]||'#8B949E', fontSize:'10px', fontWeight:700 }}>{event.type}</span>
-                    <span style={{ color:'#8B949E', fontSize:'10px', fontFamily:'monospace' }}>{getTimeDiff(event.timestamp)}</span>
+            ) : liveEvents.map((event, i) => {
+              const isVpn = event.type === 'VPN_DETECTED' || event.type === 'AUTO_BLOCKED'
+              const isBlocked = event.type === 'BLOCKED_ATTEMPT'
+
+              return (
+                <div key={event.id || i}
+                  style={{
+                    padding:'10px 14px',
+                    borderBottom:'1px solid #21262D',
+                    display:'flex', gap:'10px', alignItems:'flex-start',
+                    background: isVpn ? 'rgba(255,68,68,0.08)' : isBlocked ? 'rgba(255,140,0,0.06)' : 'transparent',
+                    borderLeft: isVpn ? '3px solid #FF4444' : isBlocked ? '3px solid #FF8C00' : '3px solid transparent'
+                  }}>
+                  <div style={{ fontSize:'14px', flexShrink:0, marginTop:'1px' }}>{typeIcon[event.type] || '●'}</div>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'2px' }}>
+                      <span style={{ color: isVpn ? '#FF4444' : severityColor[event.severity] || '#8B949E', fontSize:'10px', fontWeight:700 }}>
+                        {isVpn ? 'VPN AUTO-BLOCKED' : event.type}
+                      </span>
+                      <span style={{ color:'#8B949E', fontSize:'10px', fontFamily:'monospace' }}>{getTimeDiff(event.timestamp)}</span>
+                    </div>
+                    <div style={{ color:'#E6EDF3', fontSize:'11px', marginBottom:'2px', wordBreak:'break-all' }}>{event.message}</div>
+                    <div style={{ color:'#8B949E', fontSize:'10px', fontFamily:'monospace' }}>
+                      {event.ip} {event.label ? `— ${event.label}` : ''} · {new Date(event.timestamp).toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit', second:'2-digit' })}
+                    </div>
                   </div>
-                  <div style={{ color:'#E6EDF3', fontSize:'11px', marginBottom:'2px', wordBreak:'break-all' }}>{event.message}</div>
-                  <div style={{ color:'#8B949E', fontSize:'10px', fontFamily:'monospace' }}>
-                    {event.ip} · {new Date(event.timestamp).toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit', second:'2-digit' })}
-                  </div>
+                  {event.ip && (
+                    <button onClick={() => onBlockIP(event.ip, `Blocked from live feed — ${event.type}`)}
+                      style={{ padding:'3px 8px', background:'rgba(255,68,68,0.1)', color:'#FF4444', border:'1px solid rgba(255,68,68,0.2)', borderRadius:'4px', fontSize:'10px', cursor:'pointer', flexShrink:0, whiteSpace:'nowrap' }}>
+                      Block
+                    </button>
+                  )}
                 </div>
-                <button onClick={() => onBlockIP(event.ip, `Blocked from live feed — ${event.type}`)}
-                  style={{ padding:'3px 8px', background:'rgba(255,68,68,0.1)', color:'#FF4444', border:'1px solid rgba(255,68,68,0.2)', borderRadius:'4px', fontSize:'10px', cursor:'pointer', flexShrink:0, whiteSpace:'nowrap' }}>
-                  Block
-                </button>
-              </div>
-            ))}
+              )
+            })}
           </div>
         </div>
       </div>
@@ -234,7 +249,6 @@ const LiveTrackingPage = ({ data, onBlockIP, onBlockFingerprint, backendOnline }
             ))}
           </div>
 
-          {/* Attack types */}
           {selectedSession.attackTypes?.length > 0 && (
             <div style={{ marginBottom:'16px' }}>
               <div style={{ color:'#8B949E', fontSize:'11px', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:'8px' }}>Attack Types Used</div>
@@ -246,7 +260,6 @@ const LiveTrackingPage = ({ data, onBlockIP, onBlockFingerprint, backendOnline }
             </div>
           )}
 
-          {/* Session timeline */}
           {selectedSession.timeline?.length > 0 && (
             <div style={{ marginTop:'16px' }}>
               <div style={{ color:'#8B949E', fontSize:'11px', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:'8px' }}>Session Timeline</div>
