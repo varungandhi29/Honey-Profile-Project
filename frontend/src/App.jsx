@@ -14,8 +14,18 @@ const BACKEND = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001'
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState(null)
-  const [appBlocked, setAppBlocked] = useState(false)
-  const [appBlockedReason, setAppBlockedReason] = useState(null)
+  const [appBlocked, setAppBlocked] = useState(() => {
+    try {
+      const saved = localStorage.getItem('honeyshield_blocked')
+      return saved ? JSON.parse(saved).blocked === true : false
+    } catch { return false }
+  })
+  const [appBlockedReason, setAppBlockedReason] = useState(() => {
+    try {
+      const saved = localStorage.getItem('honeyshield_blocked')
+      return saved ? JSON.parse(saved).reason : null
+    } catch { return null }
+  })
   const [vpnBlocked, setVpnBlocked] = useState(false)
   const [vpnInfo, setVpnInfo] = useState({ ip: '127.0.0.1', label: 'VPN / Datacenter IP' })
   const [forceUpdate, setForceUpdate] = useState(0)
@@ -37,6 +47,23 @@ export default function App() {
   useEffect(() => {
     engineRef.current = new LiveDataEngine(newState => setData({ ...newState }))
     return () => engineRef.current?.destroy()
+  }, [])
+
+  // Check persistent block status on mount
+  useEffect(() => {
+    const checkPersistentBlock = async () => {
+      try {
+        const saved = localStorage.getItem('honeyshield_blocked')
+        if (saved) {
+          const parsed = JSON.parse(saved)
+          if (parsed.blocked) {
+            setAppBlocked(true)
+            setAppBlockedReason(parsed.reason || 'IP_BLOCKED')
+          }
+        }
+      } catch {}
+    }
+    checkPersistentBlock()
   }, [])
 
   // Health checks & data sync
@@ -105,6 +132,7 @@ export default function App() {
       alertEngine.stopContinuousAlert()
       setForceUpdate(p => p + 1)
       if (currentUserRef.current?.role === 'ATTACKER' || currentUserRef.current?.username === 'testuser') {
+        try { localStorage.setItem('honeyshield_blocked', JSON.stringify({ blocked: true, reason: 'IP_BLOCKED', sessionId: data.sessionId })) } catch {}
         setAppBlockedReason('IP_BLOCKED')
         setAppBlocked(true)
       } else {
@@ -114,6 +142,7 @@ export default function App() {
     onBlockedAttempt: (data) => {
       alertEngine.playBlocked()
       if (currentUserRef.current?.role === 'ATTACKER' || currentUserRef.current?.username === 'testuser') {
+        try { localStorage.setItem('honeyshield_blocked', JSON.stringify({ blocked: true, reason: 'FINGERPRINT_BLOCKED' })) } catch {}
         setAppBlockedReason('FINGERPRINT_BLOCKED')
         setAppBlocked(true)
       } else {
@@ -126,6 +155,7 @@ export default function App() {
       alertEngine.stopContinuousAlert()
       setForceUpdate(p => p + 1)
       if (currentUserRef.current?.role === 'ATTACKER' || currentUserRef.current?.username === 'testuser') {
+        try { localStorage.setItem('honeyshield_blocked', JSON.stringify({ blocked: true, reason: 'IP_BLOCKED', ip: data.ip })) } catch {}
         setAppBlockedReason('IP_BLOCKED')
         setAppBlocked(true)
       } else {
@@ -137,13 +167,26 @@ export default function App() {
       alertEngine.stopContinuousAlert()
       setForceUpdate(p => p + 1)
       if (currentUserRef.current?.role === 'ATTACKER' || currentUserRef.current?.username === 'testuser') {
+        try { localStorage.setItem('honeyshield_blocked', JSON.stringify({ blocked: true, reason: 'FINGERPRINT_BLOCKED', fingerprint: data.fingerprint })) } catch {}
         setAppBlockedReason('FINGERPRINT_BLOCKED')
         setAppBlocked(true)
       } else {
         addToast(`🚫 Fingerprint ${data.fingerprint} blocked`, 'warning')
       }
     },
-    onIPUnblocked: (data) => { engineRef.current?.unblockIP(data.ip); addToast(`✅ IP ${data.ip} unblocked`, 'success') },
+    onIPUnblocked: (data) => {
+      engineRef.current?.unblockIP(data.ip);
+      try { localStorage.removeItem('honeyshield_blocked'); } catch {}
+      setAppBlocked(false);
+      setAppBlockedReason(null);
+      addToast(`✅ IP ${data.ip} unblocked`, 'success');
+    },
+    onFingerprintUnblocked: (data) => {
+      try { localStorage.removeItem('honeyshield_blocked'); } catch {}
+      setAppBlocked(false);
+      setAppBlockedReason(null);
+      addToast(`✅ Fingerprint unblocked`, 'success');
+    },
     onVPNDetected: (data) => {
       alertEngine.playVPNDetected()
       addToast(`🚨 VPN AUTO-BLOCKED: ${data.ip} detected as ${data.label}`, 'critical')
@@ -250,6 +293,18 @@ export default function App() {
 
     console.log('[LOGIN] SessionData lat/lng:', sessionData.lat, sessionData.lng)
 
+    // Check if client is already blocked
+    if (user.role === 'ATTACKER' || user.username === 'testuser') {
+      const isLocallyBlocked = engineRef.current?.isIPBlocked(location.ip) || !!localStorage.getItem('honeyshield_blocked')
+      if (isLocallyBlocked) {
+        try { localStorage.setItem('honeyshield_blocked', JSON.stringify({ blocked: true, reason: 'IP_BLOCKED', ip: location.ip })) } catch {}
+        setAppBlockedReason('IP_BLOCKED')
+        setAppBlocked(true)
+        alertEngine.playBlocked()
+        return
+      }
+    }
+
     if (backendOnline) {
       try {
         const res = await fetch(`${BACKEND}/api/session/register`, {
@@ -264,18 +319,18 @@ export default function App() {
           setCurrentUser(null)
           sessionIdRef.current = null
           engineRef.current?.removeSession(user.username)
+          try {
+            localStorage.setItem('honeyshield_blocked', JSON.stringify({ blocked: true, reason: data.reason || 'IP_BLOCKED', ip: sessionData.ip }))
+          } catch {}
 
           if (data.reason === 'VPN_PROXY_DETECTED') {
             setVpnInfo({ ip: sessionData.ip, label: data.label || 'VPN/Proxy' })
             setVpnBlocked(true)
             alertEngine.playVPNDetected()
-          } else if (data.reason === 'IP_BLOCKED' || data.reason === 'FINGERPRINT_BLOCKED') {
-            setVpnInfo({ ip: sessionData.ip, label: 'Previously Blocked — Access Denied' })
-            setVpnBlocked(true)
-            alertEngine.playCritical()
           } else {
             setAppBlockedReason(data.reason || 'IP_BLOCKED')
             setAppBlocked(true)
+            alertEngine.playBlocked()
           }
           return
         }
@@ -285,10 +340,28 @@ export default function App() {
         addToast(`Welcome ${user.username}!`, 'success')
       } catch (e) {
         console.warn('[LOGIN] Backend registration failed:', e.message)
+        if (user.role === 'ATTACKER' || user.username === 'testuser') {
+          const isLocallyBlocked = engineRef.current?.isIPBlocked(sessionData.ip) || !!localStorage.getItem('honeyshield_blocked')
+          if (isLocallyBlocked) {
+            setAppBlockedReason('IP_BLOCKED')
+            setAppBlocked(true)
+            alertEngine.playBlocked()
+            return
+          }
+        }
         engineRef.current?.registerRealSession(sessionData)
         addToast(`Welcome ${user.username}!`, 'success')
       }
     } else {
+      if (user.role === 'ATTACKER' || user.username === 'testuser') {
+        const isLocallyBlocked = engineRef.current?.isIPBlocked(sessionData.ip) || !!localStorage.getItem('honeyshield_blocked')
+        if (isLocallyBlocked) {
+          setAppBlockedReason('IP_BLOCKED')
+          setAppBlocked(true)
+          alertEngine.playBlocked()
+          return
+        }
+      }
       engineRef.current?.registerRealSession(sessionData)
       addToast(`Welcome ${user.username}!`, 'success')
     }
@@ -310,6 +383,13 @@ export default function App() {
     alertEngine.playBlocked()
     alertEngine.stopContinuousAlert()
     setForceUpdate(p => p + 1)
+
+    try {
+      const blockedIPs = JSON.parse(localStorage.getItem('honeyshield_blocked_ips') || '[]')
+      if (!blockedIPs.includes(ip)) {
+        localStorage.setItem('honeyshield_blocked_ips', JSON.stringify([...blockedIPs, ip]))
+      }
+    } catch {}
 
     if (backendOnline) {
       try {
@@ -335,6 +415,14 @@ export default function App() {
 
   const handleUnblockIP = useCallback(async (ip) => {
     engineRef.current?.unblockIP(ip)
+    try {
+      localStorage.removeItem('honeyshield_blocked')
+      const blockedIPs = JSON.parse(localStorage.getItem('honeyshield_blocked_ips') || '[]')
+      localStorage.setItem('honeyshield_blocked_ips', JSON.stringify(blockedIPs.filter(x => x !== ip)))
+    } catch {}
+    setAppBlocked(false)
+    setAppBlockedReason(null)
+
     if (backendOnline) {
       try {
         await fetch(`${BACKEND}/api/blocklist/${encodeURIComponent(ip)}`, { method: 'DELETE' })

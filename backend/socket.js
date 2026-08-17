@@ -2,11 +2,15 @@ import { Server } from 'socket.io'
 import logger from './middleware/logger.js'
 import { cache } from './services/cacheService.js'
 export const initSocket = (httpServer, frontendUrl) => {
-  const allowedOrigins = [frontendUrl, 'http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:5173'].filter(Boolean)
   const io = new Server(httpServer, {
-    cors: { origin: allowedOrigins, methods: ['GET','POST'], credentials: true },
-    transports: ['websocket','polling'],
-    pingTimeout: 60000, pingInterval: 25000
+    cors: {
+      origin: (origin, callback) => callback(null, true),
+      methods: ['GET', 'POST'],
+      credentials: true
+    },
+    transports: ['websocket', 'polling'],
+    pingTimeout: 60000,
+    pingInterval: 25000
   })
   io.on('connection', (socket) => {
     logger.info(`[SOCKET] Connected: ${socket.id} from ${socket.handshake.address}`)

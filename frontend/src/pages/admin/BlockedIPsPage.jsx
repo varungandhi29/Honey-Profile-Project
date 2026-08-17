@@ -34,8 +34,13 @@ const BlockedIPsPage = ({ data, onBlockIP, onUnblockIP, onBlockFingerprint, onUn
 
   useEffect(() => { fetchBlocklists() }, [backendOnline])
 
-  // Merge engine + backend blocked IPs
-  const allBlockedIPs = backendOnline ? blockedList : engineBlockLog
+  // Merge engine + backend blocked IPs deduplicated by IP
+  const ipMap = new Map()
+  engineBlockLog.forEach(b => { if (b.ip) ipMap.set(b.ip, b) })
+  if (Array.isArray(blockedList)) {
+    blockedList.forEach(b => { if (b.ip) ipMap.set(b.ip, b) })
+  }
+  const allBlockedIPs = Array.from(ipMap.values())
 
   const filteredIPs = allBlockedIPs.filter(b => {
     const matchSearch = !searchQuery || b.ip?.includes(searchQuery) || b.fingerprint?.includes(searchQuery)

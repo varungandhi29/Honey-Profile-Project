@@ -9,19 +9,34 @@ class LiveDataEngine {
     this.autoResponseLog = []
     this.updateCallback = updateCallback
     this.intervals = []
-    this.attackerTimers = []
-    this.blockedIPs = new Set()
-    this.blockLog = []
+    // Load persisted blocked IPs from localStorage
+    let savedBlockedIPs = []
+    let savedBlockLog = []
+    try {
+      savedBlockedIPs = JSON.parse(localStorage.getItem('honeyshield_blocked_ips') || '[]')
+      savedBlockLog = JSON.parse(localStorage.getItem('honeyshield_block_log') || '[]')
+    } catch {}
+
+    this.blockedIPs = new Set(savedBlockedIPs)
+    this.blockLog = savedBlockLog
   }
 
   blockIP(ip, blockedBy = 'admin', reason = 'Manual block') {
+    if (!ip) return
     this.blockedIPs.add(ip)
-    this.blockLog.unshift({
+    const newEntry = {
       id: `BLOCK-${Date.now()}`,
       ip, blockedBy, reason,
       blockedAt: new Date().toISOString(),
       permanent: true
-    })
+    }
+    this.blockLog = [newEntry, ...this.blockLog.filter(b => b.ip !== ip)]
+    
+    try {
+      localStorage.setItem('honeyshield_blocked_ips', JSON.stringify([...this.blockedIPs]))
+      localStorage.setItem('honeyshield_block_log', JSON.stringify(this.blockLog))
+    } catch {}
+
     // Remove all sessions from this IP
     const removed = this.sessions.filter(s => s.ip === ip)
     this.sessions = this.sessions.filter(s => s.ip !== ip)
@@ -37,12 +52,18 @@ class LiveDataEngine {
   }
 
   unblockIP(ip) {
+    if (!ip) return
     this.blockedIPs.delete(ip)
     this.blockLog = this.blockLog.filter(b => b.ip !== ip)
+    try {
+      localStorage.setItem('honeyshield_blocked_ips', JSON.stringify([...this.blockedIPs]))
+      localStorage.setItem('honeyshield_block_log', JSON.stringify(this.blockLog))
+    } catch {}
     this.pushUpdate()
   }
 
   isIPBlocked(ip) {
+    if (!ip) return false
     return this.blockedIPs.has(ip)
   }
 
