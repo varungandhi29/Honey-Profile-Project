@@ -48,9 +48,14 @@ app.use('/api/ai', aiRoutes)
 app.use('/api/blocklist', blocklistRoutes)
 app.use('/api/vault', vaultRoutes)
 
-app.get('/', (req, res) => {
-  res.json({ message: 'HoneyShield Backend API is Running', status: 'ok', version: '2.0.0' })
-})
+import path from 'path'
+import { fileURLToPath } from 'url'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+const frontendDist = path.join(__dirname, '../frontend/dist')
+
+app.use(express.static(frontendDist))
 
 app.get('/api/health', async (req, res) => {
   res.json({ status: 'ok', version: '2.0.0', mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected', uptime: process.uptime(), timestamp: new Date().toISOString() })
@@ -121,6 +126,18 @@ cron.schedule('0 * * * *', async () => {
   const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000)
   const result = await Session.updateMany({ lastSeen: { $lt: cutoff }, isActive: true }, { isActive: false, logoutTime: new Date() })
   if (result.modifiedCount > 0) logger.info(`[CRON] Cleaned ${result.modifiedCount} stale sessions`)
+})
+
+app.get('*', (req, res, next) => {
+  if (req.path.startsWith('/api') || req.path.startsWith('/socket.io')) {
+    return next()
+  }
+  const indexPath = path.join(frontendDist, 'index.html')
+  res.sendFile(indexPath, (err) => {
+    if (err) {
+      res.json({ message: 'HoneyShield Backend Active', status: 'ok', timestamp: new Date().toISOString() })
+    }
+  })
 })
 
 app.use((err, req, res, next) => { logger.error(`Unhandled: ${err.message}`); res.status(500).json({ error: 'Internal server error' }) })
