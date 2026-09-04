@@ -1,252 +1,112 @@
-import { useState, useEffect, useRef } from 'react';
-import { USERS } from '../engine/constants';
-import { Shield, Lock, User } from 'lucide-react';
+import React, { useState } from 'react'
 
-const NeuralBackground = () => {
-  const canvasRef = useRef(null);
+const LoginPage = ({ onLogin, loginError }) => {
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [loading, setLoading] = useState(false)
 
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    
-    const setSize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-    };
-    setSize();
-    window.addEventListener('resize', setSize);
-
-    const nodes = Array.from({ length: 80 }).map(() => ({
-      x: Math.random() * canvas.width,
-      y: Math.random() * canvas.height,
-      vx: (Math.random() - 0.5) * 1,
-      vy: (Math.random() - 0.5) * 1,
-      color: Math.random() > 0.5 ? '#00FF88' : '#FF9900'
-    }));
-
-    const particles = Array.from({ length: 30 }).map(() => ({
-      x: Math.random() * canvas.width,
-      y: Math.random() * canvas.height,
-      size: Math.random() * 4 + 2,
-      vy: Math.random() * -1 - 0.5
-    }));
-
-    let scanY = 0;
-
-    const render = () => {
-      ctx.fillStyle = '#0D1117';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-      // Draw scan line
-      scanY += 2;
-      if (scanY > canvas.height) scanY = 0;
-      ctx.fillStyle = 'rgba(0, 255, 136, 0.05)';
-      ctx.fillRect(0, scanY, canvas.width, 100);
-
-      // Draw lines between nodes
-      ctx.lineWidth = 1;
-      for (let i = 0; i < nodes.length; i++) {
-        for (let j = i + 1; j < nodes.length; j++) {
-          const dx = nodes[i].x - nodes[j].x;
-          const dy = nodes[i].y - nodes[j].y;
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist < 150) {
-            ctx.beginPath();
-            ctx.strokeStyle = `rgba(0, 255, 136, ${0.2 * (1 - dist / 150)})`;
-            ctx.moveTo(nodes[i].x, nodes[i].y);
-            ctx.lineTo(nodes[j].x, nodes[j].y);
-            ctx.stroke();
-          }
-        }
-      }
-
-      // Draw nodes
-      nodes.forEach(node => {
-        node.x += node.vx;
-        node.y += node.vy;
-        if (node.x < 0 || node.x > canvas.width) node.vx *= -1;
-        if (node.y < 0 || node.y > canvas.height) node.vy *= -1;
-        
-        ctx.beginPath();
-        ctx.fillStyle = node.color;
-        ctx.arc(node.x, node.y, 3, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.shadowBlur = 10;
-        ctx.shadowColor = node.color;
-      });
-      ctx.shadowBlur = 0;
-
-      // Draw particles
-      ctx.fillStyle = 'rgba(0, 255, 136, 0.4)';
-      particles.forEach(p => {
-        p.y += p.vy;
-        if (p.y < 0) p.y = canvas.height;
-        ctx.fillRect(p.x, p.y, p.size, p.size);
-      });
-
-      requestAnimationFrame(render);
-    };
-    render();
-
-    return () => window.removeEventListener('resize', setSize);
-  }, []);
-
-  return <canvas ref={canvasRef} style={{ position: 'fixed', top: 0, left: 0, zIndex: -1 }} />;
-};
-
-export default function LoginPage({ onLogin }) {
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
-
-  const handleLogin = (e) => {
-    if (e) e.preventDefault();
-    const cleanUsername = username.trim().toLowerCase();
-    const cleanPassword = password.trim();
-    
-    console.log('[LOGIN_DEBUG] Input:', { username, password });
-    console.log('[LOGIN_DEBUG] Cleaned:', { cleanUsername, cleanPassword });
-    console.log('[LOGIN_DEBUG] USERS list:', USERS);
-    
-    const user = USERS.find(u => u.username.toLowerCase() === cleanUsername && u.password === cleanPassword);
-    console.log('[LOGIN_DEBUG] Match found:', user);
-
-    if (user) {
-      setError('');
-      onLogin({ username: user.username, role: user.role });
-    } else {
-      setError('Invalid username or password.');
+  const handleSubmit = async () => {
+    if (!username || !password || loading) return
+    setLoading(true)
+    try {
+      await onLogin({ username, password })
+    } finally {
+      setLoading(false)
     }
-  };
-
-  const handleKeyDown = (e) => {
-    if (e.key === 'Enter') handleLogin();
-  };
+  }
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', fontFamily: 'Inter, sans-serif' }}>
-      <NeuralBackground />
-      
-      <div style={{
-        background: 'rgba(22, 27, 34, 0.95)',
-        backdropFilter: 'blur(20px)',
-        border: '1px solid rgba(0, 255, 136, 0.2)',
-        borderRadius: '24px',
-        boxShadow: '0 0 60px rgba(0, 255, 136, 0.1)',
-        padding: '40px',
-        width: '100%',
-        maxWidth: '400px',
-        textAlign: 'center'
-      }}>
-        <div style={{
-          background: '#00FF88',
-          width: '56px',
-          height: '56px',
-          borderRadius: '50%',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          margin: '0 auto 20px',
-          color: '#000'
-        }}>
-          <Shield size={32} />
+    <div style={{ minHeight: '100vh', background: '#0F172A', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', overflow: 'hidden', fontFamily: 'Inter, system-ui, sans-serif' }}>
+      {/* Fake corporate background */}
+      <div style={{ position: 'absolute', inset: 0, backgroundImage: 'radial-gradient(ellipse at 50% 0%, rgba(59,130,246,0.1) 0%, transparent 70%)' }} />
+      <div style={{ background: '#1E293B', border: '1px solid #334155', borderRadius: '16px', padding: '48px 40px', width: '380px', position: 'relative', zIndex: 10, boxShadow: '0 25px 50px rgba(0,0,0,0.5)' }}>
+        {/* Logo */}
+        <div style={{ textAlign: 'center', marginBottom: '32px' }}>
+          <div style={{ width: '56px', height: '56px', background: 'linear-gradient(135deg,#3B82F6,#1D4ED8)', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '24px', margin: '0 auto 16px' }}>🏢</div>
+          <h1 style={{ color: '#F1F5F9', fontSize: '22px', fontWeight: 700, margin: 0 }}>AcmeCorp Portal</h1>
+          <p style={{ color: '#64748B', fontSize: '13px', margin: '6px 0 0' }}>Enterprise Employee Access System</p>
         </div>
-        
-        <h1 style={{ color: '#E6EDF3', fontSize: '24px', fontWeight: 'bold', marginBottom: '8px', letterSpacing: '1px' }}>
-          HONEYSHIELD V2
-        </h1>
-        <p style={{ color: '#8B949E', marginBottom: '30px', fontSize: '14px' }}>Secure Deception & Intelligence Platform</p>
 
-        {error && (
-          <div style={{ background: 'rgba(255, 68, 68, 0.1)', border: '1px solid #FF4444', color: '#FF4444', padding: '10px', borderRadius: '8px', marginBottom: '20px', fontSize: '14px' }}>
-            {error}
+        {/* Form */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div>
+            <label style={{ color: '#94A3B8', fontSize: '12px', fontWeight: 500, display: 'block', marginBottom: '6px' }}>Username or Email</label>
+            <input
+              value={username}
+              onChange={e => setUsername(e.target.value)}
+              placeholder="Enter your username"
+              style={{ width: '100%', padding: '11px 14px', background: '#0F172A', border: '1px solid #334155', borderRadius: '8px', color: '#F1F5F9', fontSize: '14px', outline: 'none', boxSizing: 'border-box', fontFamily: 'Inter' }}
+              onFocus={e => e.target.style.borderColor = '#3B82F6'}
+              onBlur={e => e.target.style.borderColor = '#334155'}
+              onKeyDown={e => e.key === 'Enter' && handleSubmit()}
+            />
           </div>
-        )}
 
-        <div style={{ marginBottom: '16px', position: 'relative' }}>
-          <User style={{ position: 'absolute', top: '12px', left: '12px', color: '#8B949E' }} size={20} />
-          <input
-            type="text"
-            placeholder="Username"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
+          <div>
+            <label style={{ color: '#94A3B8', fontSize: '12px', fontWeight: 500, display: 'block', marginBottom: '6px' }}>Password</label>
+            <input
+              type="password"
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+              placeholder="Enter your password"
+              style={{ width: '100%', padding: '11px 14px', background: '#0F172A', border: '1px solid #334155', borderRadius: '8px', color: '#F1F5F9', fontSize: '14px', outline: 'none', boxSizing: 'border-box', fontFamily: 'Inter' }}
+              onFocus={e => e.target.style.borderColor = '#3B82F6'}
+              onBlur={e => e.target.style.borderColor = '#334155'}
+              onKeyDown={e => e.key === 'Enter' && handleSubmit()}
+            />
+          </div>
+
+          {loginError && (
+            <div style={{ padding: '10px 14px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: '6px', color: '#EF4444', fontSize: '12px' }}>
+              ⚠️ {loginError}
+            </div>
+          )}
+
+          <button
+            onClick={handleSubmit}
+            disabled={loading || !username || !password}
             style={{
-              width: '100%',
-              padding: '12px 12px 12px 40px',
-              background: '#0D1117',
-              border: '1px solid #30363D',
+              padding: '12px',
+              background: loading ? '#1E293B' : 'linear-gradient(135deg,#3B82F6,#1D4ED8)',
+              color: loading ? '#475569' : 'white',
+              border: 'none',
               borderRadius: '8px',
-              color: '#FFF',
-              outline: 'none',
-              boxSizing: 'border-box'
+              fontSize: '14px',
+              fontWeight: 600,
+              cursor: loading || !username || !password ? 'not-allowed' : 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '8px',
+              transition: 'all 200ms'
             }}
-            onFocus={(e) => e.target.style.borderColor = '#00FF88'}
-            onBlur={(e) => e.target.style.borderColor = '#30363D'}
-          />
+          >
+            {loading ? (
+              <><div style={{ width: '16px', height: '16px', border: '2px solid #475569', borderTopColor: '#94A3B8', borderRadius: '50%', animation: 'spin 1s linear infinite' }} /> Authenticating...</>
+            ) : 'Sign In →'}
+          </button>
         </div>
 
-        <div style={{ marginBottom: '24px', position: 'relative' }}>
-          <Lock style={{ position: 'absolute', top: '12px', left: '12px', color: '#8B949E' }} size={20} />
-          <input
-            type="password"
-            placeholder="Password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            onKeyDown={handleKeyDown}
-            style={{
-              width: '100%',
-              padding: '12px 12px 12px 40px',
-              background: '#0D1117',
-              border: '1px solid #30363D',
-              borderRadius: '8px',
-              color: '#FFF',
-              outline: 'none',
-              boxSizing: 'border-box'
-            }}
-            onFocus={(e) => e.target.style.borderColor = '#00FF88'}
-            onBlur={(e) => e.target.style.borderColor = '#30363D'}
-          />
+        {/* Fake footer links — all traps */}
+        <div style={{ marginTop: '24px', textAlign: 'center', display: 'flex', justifyContent: 'center', gap: '16px' }}>
+          {['Forgot Password?', 'IT Support', 'Privacy Policy'].map(link => (
+            <span
+              key={link}
+              onClick={() => onLogin({ username: link.toLowerCase().replace(/\s/g, ''), password: 'forgot' })}
+              style={{ color: '#64748B', fontSize: '11px', cursor: 'pointer', textDecoration: 'underline' }}
+            >
+              {link}
+            </span>
+          ))}
         </div>
 
-        <button
-          onClick={handleLogin}
-          style={{
-            width: '100%',
-            padding: '14px',
-            background: '#00FF88',
-            color: '#0D1117',
-            border: 'none',
-            borderRadius: '8px',
-            fontWeight: 'bold',
-            fontSize: '16px',
-            cursor: 'pointer',
-            transition: 'all 0.2s',
-            boxShadow: '0 4px 0 #00CC6A'
-          }}
-          onMouseDown={(e) => {
-            e.target.style.transform = 'translateY(4px)';
-            e.target.style.boxShadow = '0 0 0 #00CC6A';
-          }}
-          onMouseUp={(e) => {
-            e.target.style.transform = 'translateY(0)';
-            e.target.style.boxShadow = '0 4px 0 #00CC6A';
-          }}
-        >
-          LOGIN
-        </button>
-
-        <div style={{ marginTop: '24px', fontSize: '12px', color: '#8B949E', textAlign: 'left', background: '#0D1117', padding: '10px', borderRadius: '8px' }}>
-          <div><strong>Demo Credentials:</strong></div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}>
-            <span>Admin: admin / admin123</span>
-            <span>User: user / user123</span>
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}>
-            <span>Attacker: testuser / testuser123</span>
-          </div>
-        </div>
+        <p style={{ color: '#334155', fontSize: '10px', textAlign: 'center', marginTop: '20px', lineHeight: '1.5' }}>
+          © 2024 AcmeCorp. Unauthorized access is prohibited and monitored. All activities are logged.
+        </p>
       </div>
+      <style>{`@keyframes spin { to { transform:rotate(360deg) } }`}</style>
     </div>
-  );
+  )
 }
+
+export default LoginPage

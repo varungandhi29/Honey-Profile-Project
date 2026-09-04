@@ -83,6 +83,8 @@ router.delete('/:ip', async (req, res) => {
     const ip = decodeURIComponent(req.params.ip)
     await BlockedIP.deleteOne({ ip })
     await cache.del(`blocked:${ip}`)
+    await cache.del(`fails:${ip}`)
+    await cache.del(`rapid:${ip}`)
     broadcast('ip_unblocked', { ip, timestamp: new Date().toISOString() })
     logger.info(`[UNBLOCK] IP ${ip} unblocked`)
     res.json({ success: true })

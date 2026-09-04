@@ -28,6 +28,7 @@ export default function App() {
   })
   const [vpnBlocked, setVpnBlocked] = useState(false)
   const [vpnInfo, setVpnInfo] = useState({ ip: '127.0.0.1', label: 'VPN / Datacenter IP' })
+  const [loginError, setLoginError] = useState('')
   const [forceUpdate, setForceUpdate] = useState(0)
   const engineRef = useRef(null)
   const sessionIdRef = useRef(null)
@@ -190,6 +191,27 @@ export default function App() {
     onVPNDetected: (data) => {
       alertEngine.playVPNDetected()
       addToast(`🚨 VPN AUTO-BLOCKED: ${data.ip} detected as ${data.label}`, 'critical')
+    },
+    onHoneyTrap: (data) => {
+      console.log('[Socket] HONEY TRAP TRIGGERED:', data)
+      alertEngine.playPoliceSiren(5)
+      addToast(`🍯 HONEY TRAP: Attacker logged in as ${data.employee?.name || data.username} (${data.employee?.role || 'Decoy'}) from ${data.ip}`, 'critical')
+      engineRef.current?.injectHoneyTrapEvent(data)
+    },
+    onSuspiciousLogin: (data) => {
+      console.log('[Socket] Suspicious login:', data)
+      alertEngine.playHigh()
+      addToast(`⚠️ Suspicious login: ${data.vectors?.join(', ')} from ${data.ip}`, 'warning')
+    },
+    onAttackerAutoBlocked: (data) => {
+      console.log('[Socket] Attacker auto-blocked:', data)
+      if (data.playSiren) alertEngine.playCritical()
+      alertEngine.stopContinuousAlert()
+      addToast(`🚫 AUTO-BLOCKED: ${data.ip} — ${data.reason}`, 'critical')
+    },
+    onEmployeesRegenerated: (data) => {
+      console.log('[Socket] Employees regenerated:', data)
+      addToast(`🔄 Regenerated ${data.count} decoy employee accounts`, 'info')
     }
   })
 
@@ -263,109 +285,87 @@ export default function App() {
     return locData;
   }, [])
 
-  const handleLogin = useCallback(async (user) => {
+  const handleLogin = useCallback(async (credentials) => {
+    setLoginError('')
     requestPermission()
-    setCurrentUser(user)
     const location = await getRealLocation()
-    console.log('[LOGIN] Location detected:', location)
-    console.log('[LOGIN] Coordinates:', location?.lat, location?.lng)
+    const fingerprint = await generateFingerprint()
+    const browser = location.browser || 'Browser'
+    const os = location.os || navigator.platform || 'Desktop'
 
-    const sessionId = `SESSION-${user.username}-${Date.now()}`
-    sessionIdRef.current = sessionId
-
-    const sessionData = {
-      sessionId,
+    const loginData = {
+      username: credentials.username,
+      password: credentials.password,
+      fingerprint,
       ip: location.ip || '127.0.0.1',
-      country: location.country || (user.role === 'ADMIN' ? 'India' : 'Local'),
-      city: location.city || (user.role === 'ADMIN' ? 'Vadodara (Local SOC)' : 'Localhost'),
-      region: location.region || '',
-      lat: parseFloat(location.lat) || (user.role === 'ADMIN' ? 22.3 : 0),   // ensure number not string
-      lng: parseFloat(location.lng) || (user.role === 'ADMIN' ? 73.1 : 0),   // ensure number not string
-      timezone: location.timezone || 'Unknown',
-      isp: location.isp || 'Unknown',
-      browser: location.browser || 'Browser',
-      os: location.os || 'Unknown',
-      device: location.device || 'Desktop',
-      username: user.username,
-      role: user.role,
-      fingerprint: await generateFingerprint()
+      lat: parseFloat(location.lat) || 0,
+      lng: parseFloat(location.lng) || 0,
+      country: location.country || 'Unknown',
+      city: location.city || 'Unknown',
+      browser,
+      os,
     }
 
-    console.log('[LOGIN] SessionData lat/lng:', sessionData.lat, sessionData.lng)
+    try {
+      const res = await fetch(`${BACKEND}/api/honeypot/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(loginData)
+      })
+      const data = await res.json()
 
-    // Check if client is already blocked
-    if (user.role === 'ATTACKER' || user.username === 'testuser') {
-      const isLocallyBlocked = engineRef.current?.isIPBlocked(location.ip) || !!localStorage.getItem('honeyshield_blocked')
-      if (isLocallyBlocked) {
-        try { localStorage.setItem('honeyshield_blocked', JSON.stringify({ blocked: true, reason: 'IP_BLOCKED', ip: location.ip })) } catch {}
-        setAppBlockedReason('IP_BLOCKED')
-        setAppBlocked(true)
-        alertEngine.playBlocked()
+      if (res.status === 403 || data.blocked) {
+        // Blocked — show appropriate screen
+        setVpnInfo({ ip: location.ip || '127.0.0.1', label: data.reason || 'Attack Detected' })
+        setVpnBlocked(true)
+        alertEngine.playCritical()
         return
       }
-    }
 
-    if (backendOnline) {
-      try {
-        const res = await fetch(`${BACKEND}/api/session/register`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(sessionData)
-        })
-        const data = await res.json()
-
-        // Handle ALL block types at login
-        if (res.status === 403 || data.blocked) {
-          setCurrentUser(null)
-          sessionIdRef.current = null
-          engineRef.current?.removeSession(user.username)
-          try {
-            localStorage.setItem('honeyshield_blocked', JSON.stringify({ blocked: true, reason: data.reason || 'IP_BLOCKED', ip: sessionData.ip }))
-          } catch {}
-
-          if (data.reason === 'VPN_PROXY_DETECTED') {
-            setVpnInfo({ ip: sessionData.ip, label: data.label || 'VPN/Proxy' })
-            setVpnBlocked(true)
-            alertEngine.playVPNDetected()
-          } else {
-            setAppBlockedReason(data.reason || 'IP_BLOCKED')
-            setAppBlocked(true)
-            alertEngine.playBlocked()
-          }
-          return
-        }
-
-        // Success — register in engine
-        engineRef.current?.registerRealSession(sessionData)
-        addToast(`Welcome ${user.username}!`, 'success')
-      } catch (e) {
-        console.warn('[LOGIN] Backend registration failed:', e.message)
-        if (user.role === 'ATTACKER' || user.username === 'testuser') {
-          const isLocallyBlocked = engineRef.current?.isIPBlocked(sessionData.ip) || !!localStorage.getItem('honeyshield_blocked')
-          if (isLocallyBlocked) {
-            setAppBlockedReason('IP_BLOCKED')
-            setAppBlocked(true)
-            alertEngine.playBlocked()
-            return
-          }
-        }
-        engineRef.current?.registerRealSession(sessionData)
-        addToast(`Welcome ${user.username}!`, 'success')
+      if (res.status === 401) {
+        // Wrong credentials — show error on login form
+        setLoginError('Invalid username or password')
+        return
       }
-    } else {
-      if (user.role === 'ATTACKER' || user.username === 'testuser') {
-        const isLocallyBlocked = engineRef.current?.isIPBlocked(sessionData.ip) || !!localStorage.getItem('honeyshield_blocked')
-        if (isLocallyBlocked) {
-          setAppBlockedReason('IP_BLOCKED')
-          setAppBlocked(true)
-          alertEngine.playBlocked()
-          return
+
+      if (data.success) {
+        // Successful login — trapped or admin
+        if (data.user?.username === 'admin' || credentials.username === 'admin') {
+          // Admin login
+          const adminUser = { ...data.user, role: 'ADMIN', isAdmin: true }
+          setCurrentUser(adminUser)
+          sessionIdRef.current = `ADMIN-${Date.now()}`
+          addToast('Welcome Admin!', 'success')
+        } else {
+          // Attacker trapped in fake employee portal
+          const trappedUser = {
+            ...data.user,
+            sessionId: data.sessionId,
+            role: 'ATTACKER',
+            isTrapped: true
+          }
+          setCurrentUser(trappedUser)
+          sessionIdRef.current = data.sessionId
+          // Register session with engine
+          engineRef.current?.registerRealSession({
+            sessionId: data.sessionId,
+            username: data.user.username,
+            role: 'ATTACKER',
+            ...location,
+            fingerprint,
+            isHoneypotTrap: true,
+            trappedEmployee: data.user.name,
+            trappedRole: data.user.role,
+            trappedDept: data.user.dept
+          })
+          addToast(`Logged in as ${data.user.name}`, 'info')
         }
       }
-      engineRef.current?.registerRealSession(sessionData)
-      addToast(`Welcome ${user.username}!`, 'success')
+    } catch (err) {
+      console.error('[LOGIN] Error:', err)
+      setLoginError('Connection error — try again')
     }
-  }, [backendOnline, getRealLocation, addToast, requestPermission])
+  }, [getRealLocation, requestPermission, addToast])
 
   const handleLogout = useCallback(async () => {
     if (backendOnline && sessionIdRef.current) {
@@ -578,7 +578,7 @@ export default function App() {
   }
 
   if (appBlocked) return <BlockedScreen reason={appBlockedReason} session={currentAttackerSession} />
-  if (!currentUser) return (<><ToastContainer /><LoginPage onLogin={handleLogin} /></>)
+  if (!currentUser) return (<><ToastContainer /><LoginPage onLogin={handleLogin} loginError={loginError} /></>)
   if (currentUser.role === 'ATTACKER') return (<><ToastContainer /><DeceptionDashboard currentUser={currentUser} onLogout={handleLogout} onAttackerAction={handleAttackerAction} /></>)
   return (
     <>

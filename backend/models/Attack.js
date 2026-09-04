@@ -12,6 +12,9 @@ const attackSchema = new mongoose.Schema({
   correlationId: { type: String, default: '' },
   aiPrediction:  { type: String, default: null },
   aiConfidence:  { type: Number, default: null },
+  detectedVectors: { type: [String], default: [] },
+  userAgent:     { type: String, default: '' },
+  fingerprint:   { type: mongoose.Schema.Types.Mixed, default: null },
   timestamp:     { type: Date, default: Date.now, index: true }
 }, { timestamps: true })
 attackSchema.index({ timestamp: -1 })

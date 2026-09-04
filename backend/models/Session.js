@@ -31,6 +31,9 @@ const sessionSchema = new mongoose.Schema({
   logoutTime:   { type: Date, default: null },
   isActive:     { type: Boolean, default: true, index: true },
   isBlocked:    { type: Boolean, default: false },
+  isHoneypotTrap:{ type: Boolean, default: false },
+  trappedEmployee: { type: String, default: null },
+  trappedRole:  { type: String, default: null },
   fnStartTime:  { type: Date, default: null },
   isSimulated:  { type: Boolean, default: false }
 }, { timestamps: true })

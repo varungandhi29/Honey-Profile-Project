@@ -4,7 +4,7 @@ const honeyLogSchema = new mongoose.Schema({
   sessionId:         { type: String, required: true, index: true },
   attackerIP:        { type: String, required: true },
   attackerCountry:   { type: String, default: 'Unknown' },
-  action:            { type: String, enum: ['READ','WRITE','DELETE','EXEC','LOGIN_ATTEMPT','DOWNLOAD'], required: true },
+  action:            { type: String, enum: ['READ','WRITE','DELETE','EXEC','LOGIN_ATTEMPT','DOWNLOAD','CREDENTIAL_TRAP'], required: true },
   fakeTarget:        { type: String, required: true },
   fakeCredential:    { type: String, default: null },
   responseSimulated: { type: String, default: '200 OK' },

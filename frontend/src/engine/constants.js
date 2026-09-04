@@ -98,6 +98,7 @@ export const ADMIN_NAV = [
   { id:'Active Sessions',     label:'Active Sessions' },
   { id:'Attack Intelligence', label:'Attack Intelligence' },
   { id:'Honey Activity',      label:'Honey Activity' },
+  { id:'Honey Traps',         label:'Honey Traps' },
   { id:'Geo Map',             label:'Geo Map' },
   { id:'Heatmap',             label:'Heatmap' },
   { id:'Alert Center',        label:'Alert Center' },

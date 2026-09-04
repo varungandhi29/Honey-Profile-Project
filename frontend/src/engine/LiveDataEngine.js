@@ -9,6 +9,7 @@ class LiveDataEngine {
     this.autoResponseLog = []
     this.updateCallback = updateCallback
     this.intervals = []
+    this.attackerTimers = []
     // Load persisted blocked IPs from localStorage
     let savedBlockedIPs = []
     let savedBlockLog = []
@@ -225,6 +226,9 @@ class LiveDataEngine {
       inHoney: isAttacker,
       honeyDuration: 0,
       honeyInteractions: 0,
+      isHoneypotTrap: data.isHoneypotTrap || false,
+      trappedEmployee: data.trappedEmployee || null,
+      trappedRole: data.trappedRole || null,
       isRealUser: true
     }
     this.sessions.push(session)
@@ -340,6 +344,50 @@ class LiveDataEngine {
     }
   }
 
+  injectHoneyTrapEvent(data) {
+    const sid = data.sessionId || `TRAP-${data.username || 'decoy'}-${Date.now()}`
+    this.updateSession({
+      sessionId: sid,
+      id: sid,
+      username: data.username,
+      ip: data.ip,
+      country: data.country || 'Unknown',
+      city: data.city || 'Unknown',
+      lat: parseFloat(data.lat) || 0,
+      lng: parseFloat(data.lng) || 0,
+      browser: data.browser || 'Browser',
+      os: data.os || 'OS',
+      state: 'ATTACKER',
+      role: 'ATTACKER',
+      riskScore: 85,
+      inHoney: true,
+      isHoneypotTrap: true,
+      trappedEmployee: data.employee?.name || data.username,
+      trappedRole: data.employee?.role || 'Decoy Account',
+      trappedDept: data.employee?.dept || 'Corporate'
+    })
+    this.injectAlert({
+      id: `ALERT-${Date.now()}`,
+      severity: 'CRITICAL',
+      title: `🍯 Honey Trap Triggered — ${data.employee?.role || 'Decoy'} Compromised`,
+      description: `Attacker logged in as ${data.employee?.name || data.username} (${data.employee?.role || 'Decoy'}) from ${data.ip}`,
+      sessionId: sid,
+      sourceIP: data.ip,
+      timestamp: data.timestamp || new Date().toISOString(),
+      status: 'New'
+    })
+    this.injectHoneyEvent({
+      id: `HONEY-${Date.now()}`,
+      sessionId: sid,
+      attackerIP: data.ip,
+      attackerCountry: data.country || 'Unknown',
+      action: 'CREDENTIAL_TRAP',
+      fakeTarget: `Employee account: ${data.employee?.name || data.username}`,
+      responseSimulated: 'Corporate portal granted',
+      timestamp: data.timestamp || new Date().toISOString()
+    })
+  }
+
   updateSession(sessionData) {
     if (!sessionData) return
     const sid = sessionData.sessionId || sessionData.id
@@ -391,7 +439,7 @@ class LiveDataEngine {
 
   removeSession(username) {
     this.sessions = this.sessions.filter(s => s.username !== username)
-    this.attackerTimers.forEach(t => { clearInterval(t); clearTimeout(t) })
+    this.attackerTimers?.forEach(t => { clearInterval(t); clearTimeout(t) })
     this.attackerTimers = []
     this.pushUpdate()
   }
@@ -463,8 +511,8 @@ class LiveDataEngine {
   }
 
   destroy() {
-    this.intervals.forEach(i => clearInterval(i))
-    this.attackerTimers.forEach(t => { clearInterval(t); clearTimeout(t) })
+    this.intervals?.forEach(i => clearInterval(i))
+    this.attackerTimers?.forEach(t => { clearInterval(t); clearTimeout(t) })
   }
 }
 

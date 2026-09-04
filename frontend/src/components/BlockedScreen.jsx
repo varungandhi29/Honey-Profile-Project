@@ -564,29 +564,58 @@ export default function BlockedScreen({ reason, session, honeyCount = 4 }) {
             Forensic incident evidence cryptographically signed and stored in HoneyShield Data Vault.
           </div>
 
-          <button
-            onClick={handleDownloadDossier}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
-              padding: '9px 18px',
-              background: 'rgba(255, 23, 68, 0.15)',
-              border: '1px solid #FF1744',
-              borderRadius: '6px',
-              color: '#FF5252',
-              fontWeight: 700,
-              fontSize: '12px',
-              cursor: 'pointer',
-              fontFamily: 'inherit',
-              transition: 'all 0.2s ease'
-            }}
-            onMouseEnter={e => { e.currentTarget.style.background = '#FF1744'; e.currentTarget.style.color = '#000' }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255, 23, 68, 0.15)'; e.currentTarget.style.color = '#FF5252' }}
-          >
-            <Download size={14} />
-            DOWNLOAD FORENSIC DOSSIER (.JSON)
-          </button>
+          <div style={{ display: 'flex', gap: '10px' }}>
+            <button
+              onClick={() => {
+                try {
+                  localStorage.removeItem('honeyshield_blocked')
+                  localStorage.removeItem('honeyshield_blocked_ips')
+                } catch {}
+                window.location.reload()
+              }}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '9px 16px',
+                background: 'rgba(0, 230, 118, 0.15)',
+                border: '1px solid #00E676',
+                borderRadius: '6px',
+                color: '#00E676',
+                fontWeight: 700,
+                fontSize: '12px',
+                cursor: 'pointer',
+                fontFamily: 'inherit',
+                transition: 'all 0.2s ease'
+              }}
+            >
+              🔄 RESET / UNBLOCK (DEMO)
+            </button>
+
+            <button
+              onClick={handleDownloadDossier}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '9px 18px',
+                background: 'rgba(255, 23, 68, 0.15)',
+                border: '1px solid #FF1744',
+                borderRadius: '6px',
+                color: '#FF5252',
+                fontWeight: 700,
+                fontSize: '12px',
+                cursor: 'pointer',
+                fontFamily: 'inherit',
+                transition: 'all 0.2s ease'
+              }}
+              onMouseEnter={e => { e.currentTarget.style.background = '#FF1744'; e.currentTarget.style.color = '#000' }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255, 23, 68, 0.15)'; e.currentTarget.style.color = '#FF5252' }}
+            >
+              <Download size={14} />
+              DOWNLOAD FORENSIC DOSSIER (.JSON)
+            </button>
+          </div>
         </div>
 
       </div>

@@ -15,6 +15,7 @@ import DataVaultPage from './admin/DataVaultPage';
 import SettingsPage from './admin/SettingsPage';
 import LiveTrackingPage from './admin/LiveTrackingPage';
 import BlockedIPsPage from './admin/BlockedIPsPage';
+import HoneyTrapsPage from './admin/HoneyTrapsPage';
 
 class ErrorBoundary extends React.Component {
   constructor(props) {
@@ -106,6 +107,7 @@ export default function AdminDashboard({ currentUser, onLogout, data, engineRef,
       case 'Active Sessions': return <ActiveSessionsPage data={safeData} settings={settings} engine={engineRef.current} onBlockIP={onBlockIP} backendOnline={backendOnline} />;
       case 'Attack Intelligence': return <AttackIntelligencePage data={safeData} settings={settings} onBlockIP={onBlockIP} />;
       case 'Honey Activity': return <HoneyActivityPage data={safeData} />;
+      case 'Honey Traps': return <HoneyTrapsPage data={safeData} onBlockIP={onBlockIP} />;
       case 'Geo Map': return <GeoMapPage data={safeData} onBlockIP={onBlockIP} />;
       case 'Heatmap': return <HeatmapPage data={safeData} />;
       case 'Alert Center': return <AlertCenterPage data={safeData} engineRef={engineRef} />;

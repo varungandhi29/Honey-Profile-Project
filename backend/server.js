@@ -16,12 +16,18 @@ import analyticsRoutes from './routes/analytics.js'
 import aiRoutes from './routes/ai.js'
 import blocklistRoutes from './routes/blocklist.js'
 import vaultRoutes from './routes/vault.js'
+import honeypotRoutes from './routes/honeypot.js'
+import { seedEmployees } from './services/employeeService.js'
+import { permanentlyBlockAttacker } from './services/attackDetectionService.js'
+import { broadcast } from './services/broadcastService.js'
+import rateLimit from 'express-rate-limit'
 import { apiLimiter } from './middleware/rateLimit.js'
 import logger from './middleware/logger.js'
 import Session from './models/Session.js'
 
 dotenv.config()
 const app = express()
+
 const httpServer = createServer(app)
 const io = initSocket(httpServer, process.env.FRONTEND_URL)
 app.set('io', io)
@@ -40,6 +46,30 @@ app.use(express.json({ limit: '10mb' }))
 app.use('/api/', apiLimiter)
 app.use((req, res, next) => { logger.info(`${req.method} ${req.path} — ${req.ip}`); next() })
 
+// Strict rate limiting on login endpoint
+const loginLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute window
+  max: 10, // max 10 requests per minute per IP
+  message: { error: 'Too many requests', blocked: true, reason: 'RATE_LIMITED' },
+  handler: async (req, res, next, options) => {
+    const ip = req.ip || req.connection?.remoteAddress || 'Unknown'
+    // Auto-block after rate limit
+    await permanentlyBlockAttacker(ip, 'Rate limit exceeded — brute force', null, 'unknown')
+    broadcast('attacker_auto_blocked', {
+      ip,
+      reason: 'Rate limit exceeded',
+      autoBlock: true,
+      playSiren: true,
+      timestamp: new Date().toISOString()
+    })
+    res.status(429).json(options.message)
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+})
+
+app.use('/api/honeypot/login', loginLimiter)
+app.use('/api/honeypot', honeypotRoutes)
 app.use('/api/session', sessionRoutes)
 app.use('/api/alerts', alertRoutes)
 app.use('/api/export', exportRoutes)
@@ -104,6 +134,7 @@ connectDB()
 
 mongoose.connection.once('open', async () => {
   logger.info('[DB] MongoDB connected')
+  await seedEmployees()
   // Clear stale sessions from previous runs
   const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000)
   try {
