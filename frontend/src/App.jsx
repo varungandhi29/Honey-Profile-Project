@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import LiveDataEngine from './engine/LiveDataEngine'
-import { ATTACK_TYPES, HONEY_TARGET_MAP } from './engine/constants'
+import { USERS, ATTACK_TYPES, HONEY_TARGET_MAP } from './engine/constants'
 import { useSocket } from './hooks/useSocket'
 import { useNotifications } from './hooks/useNotifications'
 import { generateFingerprint } from './utils/fingerprint'
@@ -444,100 +444,152 @@ export default function App() {
     const browser = location.browser || 'Browser'
     const os = location.os || navigator.platform || 'Desktop'
 
-    // Admin direct authentication via /api/auth/admin-login
-    try {
-      const res = await fetch(`${BACKEND}/api/auth/admin-login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: credentials.username, password: credentials.password })
-      })
-      const data = await res.json()
-      if (res.ok && data.success && data.token) {
-        sessionStorage.setItem('honeyshield_admin_token', data.token)
-        const adminUser = { ...data.user, role: 'ADMIN', isAdmin: true }
+    // If backend is online, attempt live backend authentication
+    if (backendOnline) {
+      try {
+        const res = await fetch(`${BACKEND}/api/auth/admin-login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: credentials.username, password: credentials.password })
+        })
+        const data = await res.json()
+        if (res.ok && data.success && data.token) {
+          sessionStorage.setItem('honeyshield_admin_token', data.token)
+          const adminUser = { ...data.user, role: 'ADMIN', isAdmin: true }
+          setCurrentUser(adminUser)
+          sessionIdRef.current = `ADMIN-${Date.now()}`
+          addToast('Welcome Admin!', 'success')
+          return
+        } else if (res.status === 401 && data.isAdminUser) {
+          setLoginError('Invalid admin credentials')
+          return
+        } else if (!res.ok && res.status !== 401) {
+          setLoginError(data.error || 'Authentication error')
+          return
+        }
+      } catch (err) {
+        console.warn('[ADMIN LOGIN] Backend unavailable, falling back to local auth:', err.message)
+      }
+
+      const loginData = {
+        username: credentials.username,
+        password: credentials.password,
+        fingerprint,
+        ip: location.ip || '127.0.0.1',
+        lat: parseFloat(location.lat) || 0,
+        lng: parseFloat(location.lng) || 0,
+        country: location.country || 'Unknown',
+        city: location.city || 'Unknown',
+        browser,
+        os,
+      }
+
+      try {
+        const res = await fetch(`${BACKEND}/api/honeypot/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(loginData)
+        })
+        const data = await res.json()
+
+        if (res.status === 403 || data.blocked) {
+          setVpnInfo({ ip: location.ip || '127.0.0.1', label: data.reason || 'Attack Detected' })
+          setAppBlockedReason(data.reason || 'IP_BLOCKED')
+          setAppBlocked(true)
+          alertEngine.playCritical()
+          return
+        }
+
+        if (res.status === 401) {
+          setLoginError('Invalid username or password')
+          return
+        }
+
+        if (data.success) {
+          const trappedUser = {
+            ...data.user,
+            sessionId: data.sessionId,
+            role: 'ATTACKER',
+            isTrapped: true
+          }
+          setCurrentUser(trappedUser)
+          sessionIdRef.current = data.sessionId
+          engineRef.current?.registerRealSession({
+            sessionId: data.sessionId,
+            username: data.user.username,
+            role: 'ATTACKER',
+            ...location,
+            fingerprint,
+            isHoneypotTrap: true,
+            trappedEmployee: data.user.name,
+            trappedRole: data.user.role,
+            trappedDept: data.user.dept
+          })
+          addToast(`Logged in as ${data.user.name}`, 'info')
+          return
+        }
+      } catch (err) {
+        console.warn('[LOGIN] Honeypot backend unavailable, falling back to local auth:', err.message)
+      }
+    }
+
+    // Local / Standalone authentication fallback against USERS registry
+    const cleanUsername = credentials.username?.trim().toLowerCase()
+    const cleanPassword = credentials.password?.trim()
+    const matchedUser = USERS.find(u => u.username.toLowerCase() === cleanUsername && u.password === cleanPassword)
+
+    if (matchedUser) {
+      if (matchedUser.role === 'ADMIN') {
+        const adminUser = { username: matchedUser.username, role: 'ADMIN', isAdmin: true }
         setCurrentUser(adminUser)
         sessionIdRef.current = `ADMIN-${Date.now()}`
         addToast('Welcome Admin!', 'success')
+        engineRef.current?.registerRealSession({
+          sessionId: sessionIdRef.current,
+          username: matchedUser.username,
+          role: 'ADMIN',
+          ...location,
+          fingerprint
+        })
         return
-      } else if (res.status === 401 && data.isAdminUser) {
-        // Admin credentials incorrect
-        setLoginError('Invalid admin credentials')
-        return
-      } else if (!res.ok && res.status !== 401) {
-        setLoginError(data.error || 'Authentication error')
-        return
-      }
-    } catch (err) {
-      console.error('[ADMIN LOGIN] Error:', err.message)
-      setLoginError('Unable to connect to authentication server')
-      return
-    }
-
-    const loginData = {
-      username: credentials.username,
-      password: credentials.password,
-      fingerprint,
-      ip: location.ip || '127.0.0.1',
-      lat: parseFloat(location.lat) || 0,
-      lng: parseFloat(location.lng) || 0,
-      country: location.country || 'Unknown',
-      city: location.city || 'Unknown',
-      browser,
-      os,
-    }
-
-    try {
-      const res = await fetch(`${BACKEND}/api/honeypot/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(loginData)
-      })
-      const data = await res.json()
-
-      if (res.status === 403 || data.blocked) {
-        // Blocked — show containment screen with active polling
-        setVpnInfo({ ip: location.ip || '127.0.0.1', label: data.reason || 'Attack Detected' })
-        setAppBlockedReason(data.reason || 'IP_BLOCKED')
-        setAppBlocked(true)
-        alertEngine.playCritical()
-        return
-      }
-
-      if (res.status === 401) {
-        // Wrong credentials — show error on login form
-        setLoginError('Invalid username or password')
-        return
-      }
-
-      if (data.success) {
-        // Attacker trapped in fake employee portal — NEVER admin
+      } else if (matchedUser.role === 'ATTACKER') {
         const trappedUser = {
-          ...data.user,
-          sessionId: data.sessionId,
+          username: matchedUser.username,
           role: 'ATTACKER',
+          sessionId: `TRAP-${Date.now()}`,
           isTrapped: true
         }
         setCurrentUser(trappedUser)
-        sessionIdRef.current = data.sessionId
-        // Register session with engine
+        sessionIdRef.current = trappedUser.sessionId
         engineRef.current?.registerRealSession({
-          sessionId: data.sessionId,
-          username: data.user.username,
+          sessionId: trappedUser.sessionId,
+          username: matchedUser.username,
           role: 'ATTACKER',
           ...location,
           fingerprint,
-          isHoneypotTrap: true,
-          trappedEmployee: data.user.name,
-          trappedRole: data.user.role,
-          trappedDept: data.user.dept
+          isHoneypotTrap: true
         })
-        addToast(`Logged in as ${data.user.name}`, 'info')
+        addToast(`Logged in as ${matchedUser.username}`, 'info')
+        return
+      } else {
+        const normalUser = {
+          username: matchedUser.username,
+          role: 'USER',
+          sessionId: `USER-${Date.now()}`
+        }
+        setCurrentUser(normalUser)
+        sessionIdRef.current = normalUser.sessionId
+        addToast(`Welcome ${matchedUser.username}!`, 'success')
+        return
       }
-    } catch (err) {
-      console.error('[LOGIN] Error:', err)
-      setLoginError('Connection error — try again')
+    } else {
+      if (cleanUsername === 'admin') {
+        setLoginError('Invalid admin credentials')
+      } else {
+        setLoginError('Invalid username or password')
+      }
     }
-  }, [getRealLocation, requestPermission, addToast])
+  }, [backendOnline, getRealLocation, requestPermission, addToast])
 
   const handleLogout = useCallback(async () => {
     const adminToken = sessionStorage.getItem('honeyshield_admin_token')
