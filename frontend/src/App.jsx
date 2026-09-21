@@ -15,18 +15,8 @@ import { BACKEND } from './utils/backendUrl'
 export default function App() {
   const [currentUser, setCurrentUser] = useState(null)
   const [unblockedData, setUnblockedData] = useState(null)
-  const [appBlocked, setAppBlocked] = useState(() => {
-    try {
-      const saved = localStorage.getItem('honeyshield_blocked')
-      return saved ? JSON.parse(saved).blocked === true : false
-    } catch { return false }
-  })
-  const [appBlockedReason, setAppBlockedReason] = useState(() => {
-    try {
-      const saved = localStorage.getItem('honeyshield_blocked')
-      return saved ? JSON.parse(saved).reason : null
-    } catch { return null }
-  })
+  const [appBlocked, setAppBlocked] = useState(false)
+  const [appBlockedReason, setAppBlockedReason] = useState(null)
   const [vpnBlocked, setVpnBlocked] = useState(false)
   const [vpnInfo, setVpnInfo] = useState({ ip: '127.0.0.1', label: 'VPN / Datacenter IP' })
   const [loginError, setLoginError] = useState('')
@@ -51,42 +41,45 @@ export default function App() {
     return () => engineRef.current?.destroy()
   }, [])
 
-  // Check persistent block status on mount — verify with backend check-status as source of truth
+  // Check persistent block status on mount — verify with backend check-status as authoritative source of truth
   useEffect(() => {
     const checkPersistentBlock = async () => {
       try {
         const saved = localStorage.getItem('honeyshield_blocked')
-        let isLocallyBlocked = false
-        if (saved) {
-          const parsed = JSON.parse(saved)
-          if (parsed.blocked) {
-            isLocallyBlocked = true
-            setAppBlocked(true)
-            setAppBlockedReason(parsed.reason || 'IP_BLOCKED')
-          }
-        }
+        const wasLocallyFlagged = saved ? JSON.parse(saved)?.blocked === true : false
 
-        // Verify with backend check-status as authoritative source of truth
+        // Query backend for authoritative block verdict
         const res = await fetch(`${BACKEND}/api/blocklist/check-status`, { signal: AbortSignal.timeout(3000) })
         if (res.ok) {
           const status = await res.json()
-          if (status.blocked === false) {
+          if (status.blocked === true) {
+            setAppBlocked(true)
+            setAppBlockedReason(status.reason || 'IP_BLOCKED')
+          } else {
+            // Backend explicitly confirmed clean
             localStorage.removeItem('honeyshield_blocked')
             localStorage.removeItem('honeyshield_blocked_ips')
             setAppBlocked(false)
             setAppBlockedReason(null)
-            if (isLocallyBlocked) {
+            if (wasLocallyFlagged) {
               setUnblockedData({
                 ip: 'Your IP',
                 timestamp: new Date().toISOString()
               })
             }
-          } else if (status.blocked === true) {
-            setAppBlocked(true)
-            setAppBlockedReason('IP_BLOCKED')
           }
+        } else {
+          // Backend is unreachable, 404, or offline — never show a ghost forensic ban
+          localStorage.removeItem('honeyshield_blocked')
+          setAppBlocked(false)
+          setAppBlockedReason(null)
         }
-      } catch {}
+      } catch {
+        // Network error / offline backend — discard stale client-side ban
+        localStorage.removeItem('honeyshield_blocked')
+        setAppBlocked(false)
+        setAppBlockedReason(null)
+      }
     }
     checkPersistentBlock()
   }, [])
