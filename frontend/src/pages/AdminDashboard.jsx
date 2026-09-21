@@ -3,7 +3,6 @@ import { Shield, LogOut, Download, AlertTriangle, Activity, Database, CheckCircl
 import { ADMIN_NAV, USER_NAV } from '../engine/constants';
 import { alertEngine } from '../audio/alertEngine';
 import OverviewPage from './admin/OverviewPage';
-import BridgeMonitorPage from './admin/BridgeMonitorPage';
 import ActiveSessionsPage from './admin/ActiveSessionsPage';
 import AttackIntelligencePage from './admin/AttackIntelligencePage';
 import HoneyActivityPage from './admin/HoneyActivityPage';
@@ -105,7 +104,6 @@ export default function AdminDashboard({ currentUser, onLogout, data, engineRef,
 
     switch (activePage) {
       case 'Overview': return <OverviewPage data={safeData} engineRef={engineRef} currentUser={currentUser} />;
-      case 'Bridge Monitor': return <BridgeMonitorPage data={safeData} />;
       case 'Active Sessions': return <ActiveSessionsPage data={safeData} settings={settings} engine={engineRef.current} onBlockIP={onBlockIP} backendOnline={backendOnline} />;
       case 'Attack Intelligence': return <AttackIntelligencePage data={safeData} settings={settings} onBlockIP={onBlockIP} />;
       case 'Honey Activity': return <HoneyActivityPage data={safeData} />;

@@ -95,7 +95,6 @@ export const LOG_CONTENT = `[2026-04-26 05:12:43] INFO  GET /admin/users 200 OK
 
 export const ADMIN_NAV = [
   { id:'Overview',            label:'Overview' },
-  { id:'Bridge Monitor',      label:'Bridge Monitor' },
   { id:'Active Sessions',     label:'Active Sessions' },
   { id:'Attack Intelligence', label:'Attack Intelligence' },
   { id:'Honey Activity',      label:'Honey Activity' },

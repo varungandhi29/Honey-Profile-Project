@@ -632,12 +632,27 @@ export default function BlockedScreen({ reason, session, honeyCount = 4, onUnblo
 
           <div style={{ display: 'flex', gap: '10px' }}>
             <button
-              onClick={() => {
+              onClick={async (e) => {
+                const btn = e.currentTarget
+                btn.disabled = true
+                btn.innerText = '⏳ UNBLOCKING...'
+                try {
+                  await fetch(`${BACKEND}/api/blocklist/unblock-self`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ip: forensics.ip, fingerprint: forensics.fingerprint })
+                  })
+                } catch {}
                 try {
                   localStorage.removeItem('honeyshield_blocked')
                   localStorage.removeItem('honeyshield_blocked_ips')
+                  sessionStorage.removeItem('honeyshield_blocked')
                 } catch {}
-                window.location.reload()
+                if (onUnblocked) {
+                  onUnblocked({ ip: forensics.ip, timestamp: new Date().toISOString() })
+                } else {
+                  window.location.reload()
+                }
               }}
               style={{
                 display: 'flex',

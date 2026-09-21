@@ -20,9 +20,7 @@ export const useSocket = ({
   onHoneyTrap,
   onSuspiciousLogin,
   onAttackerAutoBlocked,
-  onEmployeesRegenerated,
-  onBridgeEvent,
-  onAttackerRedirected
+  onEmployeesRegenerated
 }) => {
   const socketRef = useRef(null)
   const [connected, setConnected] = useState(false)
@@ -153,19 +151,6 @@ export const useSocket = ({
     socket.on('employees_regenerated', data => {
       console.log('[Socket] Employees regenerated:', data)
       handlersRef.current.onEmployeesRegenerated?.(data)
-    })
-
-    // Bridge events from Finance Portal
-    socket.on('bridge_event', data => {
-      console.log('[Socket] bridge_event:', data)
-      window.dispatchEvent(new CustomEvent('bridge_event', { detail: data }))
-      handlersRef.current.onBridgeEvent?.(data)
-    })
-
-    socket.on('attacker_redirected_to_honeypot', data => {
-      console.log('[Socket] Attacker redirected from Finance Portal:', data)
-      window.dispatchEvent(new CustomEvent('attacker_redirected_to_honeypot', { detail: data }))
-      handlersRef.current.onAttackerRedirected?.(data)
     })
 
     const pingInterval = setInterval(() => {

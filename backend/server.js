@@ -19,7 +19,6 @@ import aiRoutes from './routes/ai.js'
 import blocklistRoutes from './routes/blocklist.js'
 import vaultRoutes from './routes/vault.js'
 import honeypotRoutes from './routes/honeypot.js'
-import bridgeRoutes from './routes/bridge.js'
 import authRoutes from './routes/auth.js'
 import { seedEmployees } from './services/employeeService.js'
 import { permanentlyBlockAttacker } from './services/attackDetectionService.js'
@@ -98,7 +97,6 @@ app.use('/api/analytics', requireAdmin, analyticsRoutes)
 app.use('/api/ai', aiRoutes)
 app.use('/api/blocklist', blocklistRoutes)
 app.use('/api/vault', requireAdmin, vaultRoutes)
-app.use('/api/bridge', bridgeRoutes)
 app.use('/api/auth', authRoutes)
 
 import path from 'path'

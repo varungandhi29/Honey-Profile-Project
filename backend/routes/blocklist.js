@@ -366,6 +366,48 @@ router.delete('/fingerprint/:fp', requireAdmin, async (req, res) => {
   })
 })
 
+// POST /api/blocklist/unblock-self — self-service unblock for testing/demo clients
+router.post('/unblock-self', async (req, res) => {
+  const ip = req.body?.ip || req.ip || req.connection?.remoteAddress
+  const fingerprint = req.body?.fingerprint
+  logger.info(`[UNBLOCK_SELF] Self-unblock requested for IP: ${ip}, FP: ${fingerprint ? fingerprint.substr(0,8) + '...' : 'none'}`)
+
+  const cleared = { ip: false, fingerprint: false }
+
+  try {
+    if (ip) {
+      if (mongoose.connection.readyState === 1) {
+        await BlockedIP.deleteOne({ ip })
+        await Session.updateMany({ ip, isBlocked: true }, { isBlocked: false, unblockedAt: new Date() })
+      }
+      await cache.del(`blocked:${ip}`)
+      await cache.del(`fails:${ip}`)
+      await cache.del(`rapid:${ip}`)
+      broadcast('ip_unblocked', { ip, source: 'SELF_DEMO' })
+      cleared.ip = true
+    }
+
+    if (fingerprint) {
+      if (mongoose.connection.readyState === 1) {
+        await BlockedFingerprint.deleteOne({ fingerprint })
+        await Session.updateMany(
+          { $or: [{ fingerprintHash: fingerprint }, { 'fingerprint.hash': fingerprint }], isBlocked: true },
+          { isBlocked: false, unblockedAt: new Date() }
+        )
+      }
+      await cache.del(`blocked:fp:${fingerprint}`)
+      broadcast('fingerprint_unblocked', { fingerprint, source: 'SELF_DEMO' })
+      cleared.fingerprint = true
+    }
+
+    broadcast('client_unblocked', { ip, fingerprint, source: 'SELF_DEMO', timestamp: new Date().toISOString() })
+    res.json({ success: true, cleared })
+  } catch (err) {
+    logger.error(`[UNBLOCK_SELF] Error: ${err.message}`)
+    res.status(500).json({ error: err.message })
+  }
+})
+
 // POST /api/blocklist/unblock-client — unblock both IP and Fingerprint for this client (Admin only)
 router.post('/unblock-client', requireAdmin, async (req, res) => {
   const { ip, fingerprint, reason } = req.body || {}
