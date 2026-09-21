@@ -27,6 +27,13 @@ class MockLocalStorage {
   }
 }
 
+function getRenderedScreen(result) {
+  if (result.unblockedData) return 'UnblockedScreen'
+  if (result.appBlocked || result.verificationState === 'CONFIRMED_BLOCKED') return 'BlockedScreen'
+  if (result.verificationState === 'CHECKING' || result.verificationState === 'UNKNOWN_RETRYING') return 'VerifyingScreen'
+  return 'LoginPage'
+}
+
 async function runCheckPersistentBlock({
   mockStorage,
   mockFetchResponse = null,
@@ -38,6 +45,7 @@ async function runCheckPersistentBlock({
   let verifyMessage = ''
   let unblockedData = null
   let scheduledDelay = null
+  let fetchCalled = false
 
   const saved = mockStorage.getItem('honeyshield_blocked')
   let wasLocallyFlagged = false
@@ -45,13 +53,19 @@ async function runCheckPersistentBlock({
     wasLocallyFlagged = saved ? JSON.parse(saved)?.blocked === true : false
   } catch {}
 
+  // FAST-PATH: If this client has no prior block flag in localStorage,
+  // NEVER call check-status. Skip verification entirely and render normal app/login immediately.
+  // Real security enforcement lives server-side on login/register endpoints.
   if (!wasLocallyFlagged) {
-    verificationState = 'CONFIRMED_UNBLOCKED'
+    verificationState = 'IDLE'
     appBlocked = false
-    return { appBlocked, appBlockedReason, verificationState, verifyMessage, unblockedData, scheduledDelay }
+    return { appBlocked, appBlockedReason, verificationState, verifyMessage, unblockedData, scheduledDelay, fetchCalled }
   }
 
+  // SLOW-PATH: Client has a recorded block flag in localStorage that must be reconciled.
+  // Invoke strict Three-State fail-closed verification.
   verificationState = 'CHECKING'
+  fetchCalled = true
 
   try {
     if (fetchThrows) {
@@ -67,7 +81,7 @@ async function runCheckPersistentBlock({
         verificationState = 'CONFIRMED_BLOCKED'
         appBlocked = true
         appBlockedReason = 'IP_BLOCKED'
-        return { appBlocked, appBlockedReason, verificationState, verifyMessage, unblockedData, scheduledDelay }
+        return { appBlocked, appBlockedReason, verificationState, verifyMessage, unblockedData, scheduledDelay, fetchCalled }
       } else if (data && data.blocked === false) {
         // STATE 1: CONFIRMED UNBLOCKED
         mockStorage.removeItem('honeyshield_blocked')
@@ -76,7 +90,7 @@ async function runCheckPersistentBlock({
         appBlocked = false
         appBlockedReason = null
         unblockedData = { ip: 'Your IP', timestamp: new Date().toISOString() }
-        return { appBlocked, appBlockedReason, verificationState, verifyMessage, unblockedData, scheduledDelay }
+        return { appBlocked, appBlockedReason, verificationState, verifyMessage, unblockedData, scheduledDelay, fetchCalled }
       }
     }
 
@@ -104,7 +118,7 @@ async function runCheckPersistentBlock({
     verifyMessage = `Unable to verify status: ${reasonDesc}. Retrying in ${Math.round(scheduledDelay / 1000)}s...`
   }
 
-  return { appBlocked, appBlockedReason, verificationState, verifyMessage, unblockedData, scheduledDelay }
+  return { appBlocked, appBlockedReason, verificationState, verifyMessage, unblockedData, scheduledDelay, fetchCalled }
 }
 
 // Test 1: HTTP 429 Rate Limit Response while Blocked (The exact reported security inversion)
@@ -127,11 +141,13 @@ async function runCheckPersistentBlock({
   console.log('   - verifyMessage:', result.verifyMessage)
   console.log('   - scheduledDelay:', result.scheduledDelay, 'ms')
   console.log('   - localStorage honeyshield_blocked:', mockStorage.getItem('honeyshield_blocked'))
+  console.log('   - rendered screen:', getRenderedScreen(result))
 
   assert.strictEqual(result.verificationState, 'UNKNOWN_RETRYING', 'State must be UNKNOWN_RETRYING on 429')
   assert.strictEqual(result.appBlocked, false, 'appBlocked remains guarded by verificationState')
   assert.strictEqual(result.unblockedData, null, 'unblockedData must be null')
   assert.strictEqual(result.scheduledDelay, 10000, 'Retry delay must be 10000ms on 429')
+  assert.strictEqual(getRenderedScreen(result), 'VerifyingScreen', 'Must render VerifyingScreen (NOT LoginPage)')
   assert.ok(mockStorage.getItem('honeyshield_blocked'), 'CRITICAL FAIL-CLOSED ASSERTION: localStorage was NOT purged on 429!')
   console.log('   ✅ PASS: HTTP 429 correctly retained local storage ban and transitioned to UNKNOWN_RETRYING with 10s backoff')
 }
@@ -153,9 +169,11 @@ async function runCheckPersistentBlock({
   console.log('\n[TEST 2] HTTP 500 Server Error while Blocked:')
   console.log('   - verificationState:', result.verificationState)
   console.log('   - localStorage honeyshield_blocked:', mockStorage.getItem('honeyshield_blocked'))
+  console.log('   - rendered screen:', getRenderedScreen(result))
 
   assert.strictEqual(result.verificationState, 'UNKNOWN_RETRYING')
   assert.strictEqual(result.unblockedData, null)
+  assert.strictEqual(getRenderedScreen(result), 'VerifyingScreen')
   assert.ok(mockStorage.getItem('honeyshield_blocked'), 'CRITICAL FAIL-CLOSED ASSERTION: localStorage was NOT purged on 500!')
   console.log('   ✅ PASS: HTTP 500 retained local storage ban and did NOT grant access')
 }
@@ -174,8 +192,10 @@ async function runCheckPersistentBlock({
   console.log('   - verificationState:', result.verificationState)
   console.log('   - verifyMessage:', result.verifyMessage)
   console.log('   - localStorage honeyshield_blocked:', mockStorage.getItem('honeyshield_blocked'))
+  console.log('   - rendered screen:', getRenderedScreen(result))
 
   assert.strictEqual(result.verificationState, 'UNKNOWN_RETRYING')
+  assert.strictEqual(getRenderedScreen(result), 'VerifyingScreen')
   assert.ok(result.verifyMessage.includes('Connection timed out'))
   assert.ok(mockStorage.getItem('honeyshield_blocked'), 'CRITICAL FAIL-CLOSED ASSERTION: localStorage was NOT purged on AbortError!')
   console.log('   ✅ PASS: 10s AbortError timeout retained local storage ban and did NOT grant access')
@@ -198,11 +218,13 @@ async function runCheckPersistentBlock({
   console.log('   - verificationState:', result.verificationState)
   console.log('   - appBlocked:', result.appBlocked)
   console.log('   - localStorage honeyshield_blocked:', mockStorage.getItem('honeyshield_blocked'))
+  console.log('   - rendered screen:', getRenderedScreen(result))
 
   assert.strictEqual(result.verificationState, 'CONFIRMED_BLOCKED')
   assert.strictEqual(result.appBlocked, true)
+  assert.strictEqual(getRenderedScreen(result), 'BlockedScreen')
   assert.ok(mockStorage.getItem('honeyshield_blocked'))
-  console.log('   ✅ PASS: Authoritative blocked status transitioned to CONFIRMED_BLOCKED')
+  console.log('   ✅ PASS: Authoritative blocked status transitioned to CONFIRMED_BLOCKED and rendered BlockedScreen')
 }
 
 // Test 5: Authoritative 200 OK with blocked: false (CONFIRMED_UNBLOCKED)
@@ -223,12 +245,44 @@ async function runCheckPersistentBlock({
   console.log('   - appBlocked:', result.appBlocked)
   console.log('   - localStorage honeyshield_blocked:', mockStorage.getItem('honeyshield_blocked'))
   console.log('   - unblockedData:', result.unblockedData)
+  console.log('   - rendered screen:', getRenderedScreen(result))
 
   assert.strictEqual(result.verificationState, 'CONFIRMED_UNBLOCKED')
   assert.strictEqual(result.appBlocked, false)
   assert.strictEqual(mockStorage.getItem('honeyshield_blocked'), null, 'localStorage MUST be cleared only when server authoritatively returns blocked: false')
   assert.ok(result.unblockedData !== null)
-  console.log('   ✅ PASS: Only an authoritative 200 OK { blocked: false } clears localStorage and grants access')
+  assert.strictEqual(getRenderedScreen(result), 'UnblockedScreen')
+  console.log('   ✅ PASS: Only an authoritative 200 OK { blocked: false } clears localStorage and grants access via UnblockedScreen')
+}
+
+// Test 6: Brand-New / Clean Visitor with Backend 404 / Offline (The critical reported outage case)
+{
+  const mockStorage = new MockLocalStorage()
+  // Clean visitor: NO honeyshield_blocked flag exists in localStorage
+  assert.strictEqual(mockStorage.getItem('honeyshield_blocked'), null)
+
+  // Even if backend would return 404 or throw a network error:
+  const mockRes = {
+    ok: false,
+    status: 404,
+    statusText: 'Not Found',
+    json: async () => ({ error: 'Not Found' })
+  }
+
+  const result = await runCheckPersistentBlock({ mockStorage, mockFetchResponse: mockRes })
+  const renderedScreen = getRenderedScreen(result)
+
+  console.log('\n[TEST 6] Clean Visitor with Backend 404 / Offline:')
+  console.log('   - was check-status fetch called:', result.fetchCalled)
+  console.log('   - verificationState:', result.verificationState)
+  console.log('   - appBlocked:', result.appBlocked)
+  console.log('   - rendered screen:', renderedScreen)
+
+  assert.strictEqual(result.fetchCalled, false, 'CRITICAL: check-status fetch must NEVER be called for unflagged visitors')
+  assert.strictEqual(result.verificationState, 'IDLE', 'verificationState must be IDLE (ready)')
+  assert.strictEqual(result.appBlocked, false, 'appBlocked must be false')
+  assert.strictEqual(renderedScreen, 'LoginPage', 'CRITICAL: Clean visitor must render LoginPage immediately, NOT VerifyingScreen!')
+  console.log('   ✅ PASS: Clean visitor bypassed check-status completely and immediately rendered LoginPage despite 404 backend!')
 }
 
 // -------------------------------------------------------------
@@ -259,5 +313,5 @@ try {
 }
 
 console.log('\n===================================================================')
-console.log('   ALL FAIL-CLOSED TESTS PASSED SUCCESSFULLY!                      ')
+console.log('   ALL 6 TESTS (FAIL-CLOSED + CLEAN VISITOR FAST-PATH) PASSED!    ')
 console.log('===================================================================\n')

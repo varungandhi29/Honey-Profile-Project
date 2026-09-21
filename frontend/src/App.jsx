@@ -52,26 +52,30 @@ export default function App() {
     return () => engineRef.current?.destroy()
   }, [])
 
-  // Check persistent block status on mount with strict Three-State fail-closed model
+  // Only reconcile / verify clients who ALREADY have a local block flag from a prior session.
+  // Ordinary, unflagged visitors skip check-status entirely and render normal app/login immediately.
   useEffect(() => {
     let isCancelled = false
 
+    let wasLocallyFlagged = false
+    try {
+      const saved = localStorage.getItem('honeyshield_blocked')
+      wasLocallyFlagged = saved ? JSON.parse(saved)?.blocked === true : false
+    } catch {}
+
+    // FAST-PATH: If this client has no prior block flag in localStorage,
+    // NEVER call check-status. Skip verification entirely and render normal app/login immediately.
+    // Real security enforcement lives server-side on login/register endpoints.
+    if (!wasLocallyFlagged) {
+      setVerificationState('IDLE')
+      setAppBlocked(false)
+      return
+    }
+
+    // SLOW-PATH: Client has a recorded block flag in localStorage that must be reconciled.
+    // Invoke strict Three-State fail-closed verification.
     const checkPersistentBlock = async (retryCount = 0) => {
       if (isCancelled) return
-
-      const saved = localStorage.getItem('honeyshield_blocked')
-      let wasLocallyFlagged = false
-      try {
-        wasLocallyFlagged = saved ? JSON.parse(saved)?.blocked === true : false
-      } catch {}
-
-      // If client has never been flagged as blocked, proceed cleanly
-      if (!wasLocallyFlagged) {
-        setVerificationState('CONFIRMED_UNBLOCKED')
-        setAppBlocked(false)
-        return
-      }
-
       setVerificationState('CHECKING')
 
       try {
@@ -215,6 +219,7 @@ export default function App() {
     setAppBlocked(false)
     setAppBlockedReason(null)
     setVpnBlocked(false)
+    setVerificationState('CONFIRMED_UNBLOCKED')
 
     // C6: Only show UnblockedScreen if client was previously in a blocked state
     if (wasBlocked) {
