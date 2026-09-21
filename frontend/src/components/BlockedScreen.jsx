@@ -637,21 +637,33 @@ export default function BlockedScreen({ reason, session, honeyCount = 4, onUnblo
                 btn.disabled = true
                 btn.innerText = '⏳ UNBLOCKING...'
                 try {
-                  await fetch(`${BACKEND}/api/blocklist/unblock-self`, {
+                  const res = await fetch(`${BACKEND}/api/blocklist/unblock-self`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ ip: forensics.ip, fingerprint: forensics.fingerprint })
                   })
-                } catch {}
-                try {
-                  localStorage.removeItem('honeyshield_blocked')
-                  localStorage.removeItem('honeyshield_blocked_ips')
-                  sessionStorage.removeItem('honeyshield_blocked')
-                } catch {}
-                if (onUnblocked) {
-                  onUnblocked({ ip: forensics.ip, timestamp: new Date().toISOString() })
-                } else {
-                  window.location.reload()
+                  if (res.ok) {
+                    try {
+                      localStorage.removeItem('honeyshield_blocked')
+                      localStorage.removeItem('honeyshield_blocked_ips')
+                      sessionStorage.removeItem('honeyshield_blocked')
+                    } catch {}
+                    if (onUnblocked) {
+                      onUnblocked({ ip: forensics.ip, timestamp: new Date().toISOString() })
+                    } else {
+                      window.location.reload()
+                    }
+                    return
+                  } else {
+                    const errData = await res.json().catch(() => ({}))
+                    btn.disabled = false
+                    btn.innerText = res.status === 429 ? '⏳ RATE LIMITED (429)' : '⚠️ UNBLOCK FAILED'
+                    alert(errData.error || `Unblock failed with HTTP ${res.status}. Access remains restricted.`)
+                  }
+                } catch (err) {
+                  btn.disabled = false
+                  btn.innerText = '⚠️ NETWORK ERROR'
+                  alert('Unable to reach authentication server. Access remains restricted.')
                 }
               }}
               style={{

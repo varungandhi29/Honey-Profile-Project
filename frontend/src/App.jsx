@@ -10,6 +10,7 @@ import AdminDashboard from './pages/AdminDashboard'
 import DeceptionDashboard from './pages/DeceptionDashboard'
 import BlockedScreen from './components/BlockedScreen'
 import UnblockedScreen from './components/UnblockedScreen'
+import VerifyingScreen from './components/VerifyingScreen'
 import { BACKEND } from './utils/backendUrl'
 
 export default function App() {
@@ -17,6 +18,16 @@ export default function App() {
   const [unblockedData, setUnblockedData] = useState(null)
   const [appBlocked, setAppBlocked] = useState(false)
   const [appBlockedReason, setAppBlockedReason] = useState(null)
+  const [verificationState, setVerificationState] = useState(() => {
+    try {
+      const saved = localStorage.getItem('honeyshield_blocked')
+      return (saved && JSON.parse(saved)?.blocked === true) ? 'CHECKING' : 'IDLE'
+    } catch { return 'IDLE' }
+  })
+  const [verifyMessage, setVerifyMessage] = useState('')
+  const retryTimeoutRef = useRef(null)
+  const checkPersistentBlockRef = useRef(null)
+
   const [vpnBlocked, setVpnBlocked] = useState(false)
   const [vpnInfo, setVpnInfo] = useState({ ip: '127.0.0.1', label: 'VPN / Datacenter IP' })
   const [loginError, setLoginError] = useState('')
@@ -41,47 +52,111 @@ export default function App() {
     return () => engineRef.current?.destroy()
   }, [])
 
-  // Check persistent block status on mount — verify with backend check-status as authoritative source of truth
+  // Check persistent block status on mount with strict Three-State fail-closed model
   useEffect(() => {
-    const checkPersistentBlock = async () => {
-      try {
-        const saved = localStorage.getItem('honeyshield_blocked')
-        const wasLocallyFlagged = saved ? JSON.parse(saved)?.blocked === true : false
+    let isCancelled = false
 
-        // Query backend for authoritative block verdict
-        const res = await fetch(`${BACKEND}/api/blocklist/check-status`, { signal: AbortSignal.timeout(3000) })
+    const checkPersistentBlock = async (retryCount = 0) => {
+      if (isCancelled) return
+
+      const saved = localStorage.getItem('honeyshield_blocked')
+      let wasLocallyFlagged = false
+      try {
+        wasLocallyFlagged = saved ? JSON.parse(saved)?.blocked === true : false
+      } catch {}
+
+      // If client has never been flagged as blocked, proceed cleanly
+      if (!wasLocallyFlagged) {
+        setVerificationState('CONFIRMED_UNBLOCKED')
+        setAppBlocked(false)
+        return
+      }
+
+      setVerificationState('CHECKING')
+
+      try {
+        // 10000ms timeout tolerates cold-start backends (Render / Koyeb / sleeping hosts)
+        const controller = new AbortController()
+        const timeoutId = setTimeout(() => controller.abort(), 10000)
+
+        let fpParam = ''
+        try {
+          const fp = await generateFingerprint()
+          if (fp) fpParam = `?fingerprint=${encodeURIComponent(fp)}`
+        } catch {}
+
+        const res = await fetch(`${BACKEND}/api/blocklist/check-status${fpParam}`, {
+          signal: controller.signal
+        })
+        clearTimeout(timeoutId)
+
         if (res.ok) {
-          const status = await res.json()
-          if (status.blocked === true) {
+          const data = await res.json()
+          if (data && data.blocked === true) {
+            // STATE 2: CONFIRMED BLOCKED — authoritative 200 from live server
+            if (isCancelled) return
+            setVerificationState('CONFIRMED_BLOCKED')
             setAppBlocked(true)
-            setAppBlockedReason(status.reason || 'IP_BLOCKED')
-          } else {
-            // Backend explicitly confirmed clean
+            setAppBlockedReason('IP_BLOCKED')
+            return
+          } else if (data && data.blocked === false) {
+            // STATE 1: CONFIRMED UNBLOCKED — authoritative 200 confirming clean status
+            if (isCancelled) return
             localStorage.removeItem('honeyshield_blocked')
             localStorage.removeItem('honeyshield_blocked_ips')
+            setVerificationState('CONFIRMED_UNBLOCKED')
             setAppBlocked(false)
             setAppBlockedReason(null)
-            if (wasLocallyFlagged) {
-              setUnblockedData({
-                ip: 'Your IP',
-                timestamp: new Date().toISOString()
-              })
-            }
+            setUnblockedData({
+              ip: 'Your IP',
+              timestamp: new Date().toISOString()
+            })
+            return
           }
-        } else {
-          // Backend is unreachable, 404, or offline — never show a ghost forensic ban
-          localStorage.removeItem('honeyshield_blocked')
-          setAppBlocked(false)
-          setAppBlockedReason(null)
         }
-      } catch {
-        // Network error / offline backend — discard stale client-side ban
-        localStorage.removeItem('honeyshield_blocked')
-        setAppBlocked(false)
-        setAppBlockedReason(null)
+
+        // STATE 3: UNKNOWN (HTTP 429, 500, 502, 503, 404)
+        // STRICT FAIL-CLOSED: DO NOT purge localStorage, DO NOT grant access
+        if (isCancelled) return
+        const isRateLimited = res.status === 429
+        const retryDelay = isRateLimited ? 10000 : Math.min(3000 * Math.pow(1.5, retryCount), 15000)
+        const reasonDesc = isRateLimited
+          ? 'Rate limit active (HTTP 429)'
+          : `Server returned HTTP ${res.status}`
+
+        setVerificationState('UNKNOWN_RETRYING')
+        setVerifyMessage(`Unable to verify status: ${reasonDesc}. Retrying in ${Math.round(retryDelay / 1000)}s...`)
+
+        retryTimeoutRef.current = setTimeout(() => {
+          checkPersistentBlock(retryCount + 1)
+        }, retryDelay)
+
+      } catch (err) {
+        // STATE 3: UNKNOWN (Network error, connection refused, AbortSignal 10s timeout)
+        // STRICT FAIL-CLOSED: DO NOT purge localStorage, DO NOT grant access
+        if (isCancelled) return
+        const isTimeout = err.name === 'AbortError'
+        const retryDelay = Math.min(4000 * Math.pow(1.5, retryCount), 15000)
+        const reasonDesc = isTimeout
+          ? 'Connection timed out (backend starting up)'
+          : 'Network connection unreachable'
+
+        setVerificationState('UNKNOWN_RETRYING')
+        setVerifyMessage(`Unable to verify status: ${reasonDesc}. Retrying in ${Math.round(retryDelay / 1000)}s...`)
+
+        retryTimeoutRef.current = setTimeout(() => {
+          checkPersistentBlock(retryCount + 1)
+        }, retryDelay)
       }
     }
+
+    checkPersistentBlockRef.current = checkPersistentBlock
     checkPersistentBlock()
+
+    return () => {
+      isCancelled = true
+      if (retryTimeoutRef.current) clearTimeout(retryTimeoutRef.current)
+    }
   }, [])
 
   // Verify admin session on mount
@@ -691,13 +766,27 @@ export default function App() {
     )
   }
 
-  // Blocked Screen with 4000ms polling, visibility pause, 429 backoff per C2
-  if (appBlocked || vpnBlocked) {
+  // State 2: Confirmed Blocked — Show BlockedScreen
+  if (appBlocked || vpnBlocked || verificationState === 'CONFIRMED_BLOCKED') {
     return (
       <BlockedScreen
         reason={appBlockedReason || (vpnBlocked ? 'VPN_PROXY_DETECTED' : 'IP_BLOCKED')}
         session={currentAttackerSession}
         onUnblocked={handleClientUnblocked}
+      />
+    )
+  }
+
+  // State 3: Neutral verification screen while CHECKING or UNKNOWN_RETRYING (Fail-Closed: Access strictly NOT granted)
+  if (verificationState === 'CHECKING' || verificationState === 'UNKNOWN_RETRYING') {
+    return (
+      <VerifyingScreen
+        state={verificationState}
+        message={verifyMessage}
+        onRetry={() => {
+          if (retryTimeoutRef.current) clearTimeout(retryTimeoutRef.current)
+          checkPersistentBlockRef.current?.(0)
+        }}
       />
     )
   }
