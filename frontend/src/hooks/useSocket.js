@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { io } from 'socket.io-client'
 import { generateFingerprint } from '../utils/fingerprint'
-
-const BACKEND = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001'
+import { BACKEND } from '../utils/backendUrl'
 
 export const useSocket = ({
   onAttack,

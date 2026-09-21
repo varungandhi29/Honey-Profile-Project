@@ -175,8 +175,8 @@ const connectDB = async () => {
 await initCache()
 await connectDB()
 
-mongoose.connection.once('open', async () => {
-  logger.info('[DB] MongoDB connected')
+const onDBConnected = async () => {
+  logger.info('[DB] MongoDB connected and initialized')
   await seedEmployees()
   // Clear stale sessions from previous runs
   const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000)
@@ -191,7 +191,13 @@ mongoose.connection.once('open', async () => {
   } catch (e) {
     logger.warn(`[STARTUP] Error auto-clearing stale sessions: ${e.message}`)
   }
-})
+}
+
+if (mongoose.connection.readyState === 1) {
+  await onDBConnected()
+} else {
+  mongoose.connection.once('open', onDBConnected)
+}
 
 mongoose.connection.on('disconnected', () => logger.warn('[DB] MongoDB disconnected'))
 mongoose.connection.on('reconnected', () => logger.info('[DB] MongoDB reconnected'))

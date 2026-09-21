@@ -1,8 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Lock, Download, Database, Shield, AlertTriangle, Activity, FileText, FolderOpen } from 'lucide-react';
 import EvidenceModal from '../../components/EvidenceModal';
-
-const BACKEND = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001'
+import { BACKEND } from '../../utils/backendUrl';
 
 export default function DataVaultPage({ currentUser, backendOnline }) {
   const [vaultData, setVaultData] = useState(null)

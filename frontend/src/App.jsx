@@ -10,8 +10,7 @@ import AdminDashboard from './pages/AdminDashboard'
 import DeceptionDashboard from './pages/DeceptionDashboard'
 import BlockedScreen from './components/BlockedScreen'
 import UnblockedScreen from './components/UnblockedScreen'
-
-const BACKEND = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001'
+import { BACKEND } from './utils/backendUrl'
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState(null)

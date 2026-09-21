@@ -1,8 +1,7 @@
 import React, { useState, useEffect, useId } from 'react'
 import { ShieldAlert, Terminal, Download, AlertTriangle, Cpu, Globe, Lock, RefreshCw, XCircle, Skull, FileText, CheckCircle } from 'lucide-react'
 import { generateFingerprint } from '../utils/fingerprint'
-
-const BACKEND = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001'
+import { BACKEND } from '../utils/backendUrl'
 
 export default function BlockedScreen({ reason, session, honeyCount = 4, onUnblocked }) {
   const [forensics, setForensics] = useState({

@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react'
-
-const BACKEND = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001'
+import { BACKEND } from '../utils/backendUrl'
 
 export default function EvidenceModal({ sessionId, onClose }) {
   const [evidence, setEvidence] = useState(null)

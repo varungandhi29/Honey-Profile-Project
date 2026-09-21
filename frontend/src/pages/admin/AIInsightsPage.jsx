@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { BrainCircuit, Server, Activity, RefreshCw } from 'lucide-react';
+import { BACKEND } from '../../utils/backendUrl';
 
 export default function AIInsightsPage({ data, backendOnline }) {
   const [insights, setInsights] = useState([]);
@@ -9,11 +10,11 @@ export default function AIInsightsPage({ data, backendOnline }) {
   const fetchInsights = async () => {
     setLoading(true);
     try {
-      const rm = await fetch(`${import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001'}/api/ai/health`);
+      const rm = await fetch(`${BACKEND}/api/ai/health`);
       const dm = await rm.json();
       setModelInfo(prev => ({ ...prev, ready: dm.online || dm.model_loaded }));
 
-      const res = await fetch(`${import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001'}/api/ai/insights`);
+      const res = await fetch(`${BACKEND}/api/ai/insights`);
       const d = await res.json();
       if (d.insights && d.insights.length > 0) {
         setInsights(d.insights);
