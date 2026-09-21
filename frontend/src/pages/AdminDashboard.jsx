@@ -3,6 +3,7 @@ import { Shield, LogOut, Download, AlertTriangle, Activity, Database, CheckCircl
 import { ADMIN_NAV, USER_NAV } from '../engine/constants';
 import { alertEngine } from '../audio/alertEngine';
 import OverviewPage from './admin/OverviewPage';
+import BridgeMonitorPage from './admin/BridgeMonitorPage';
 import ActiveSessionsPage from './admin/ActiveSessionsPage';
 import AttackIntelligencePage from './admin/AttackIntelligencePage';
 import HoneyActivityPage from './admin/HoneyActivityPage';
@@ -54,7 +55,7 @@ const downloadCSV = (filename, rows, columns) => {
   document.body.removeChild(a); URL.revokeObjectURL(url);
 };
 
-export default function AdminDashboard({ currentUser, onLogout, data, engineRef, backendOnline, aiOnline, socketConnected, latency, unreadCount, onBlockIP, onUnblockIP, onBlockFingerprint, onUnblockFingerprint }) {
+export default function AdminDashboard({ currentUser, onLogout, data, engineRef, backendOnline, aiOnline, socketConnected, latency, unreadCount, onBlockIP, onUnblockIP, onBlockFingerprint, onUnblockFingerprint, onUnblockClient }) {
   const [activePage, setActivePage] = useState('Overview');
   const [time, setTime] = useState(new Date());
   const [showExport, setShowExport] = useState(false);
@@ -104,6 +105,7 @@ export default function AdminDashboard({ currentUser, onLogout, data, engineRef,
 
     switch (activePage) {
       case 'Overview': return <OverviewPage data={safeData} engineRef={engineRef} currentUser={currentUser} />;
+      case 'Bridge Monitor': return <BridgeMonitorPage data={safeData} />;
       case 'Active Sessions': return <ActiveSessionsPage data={safeData} settings={settings} engine={engineRef.current} onBlockIP={onBlockIP} backendOnline={backendOnline} />;
       case 'Attack Intelligence': return <AttackIntelligencePage data={safeData} settings={settings} onBlockIP={onBlockIP} />;
       case 'Honey Activity': return <HoneyActivityPage data={safeData} />;
@@ -115,7 +117,7 @@ export default function AdminDashboard({ currentUser, onLogout, data, engineRef,
       case 'AI Insights': return <AIInsightsPage data={safeData} backendOnline={backendOnline} />;
       case 'Data Vault': return <DataVaultPage data={safeData} currentUser={currentUser} />;
       case 'Live Tracking': return <LiveTrackingPage data={safeData} onBlockIP={onBlockIP} onBlockFingerprint={onBlockFingerprint} backendOnline={backendOnline} />;
-      case 'Blocked IPs': return <BlockedIPsPage data={safeData} onBlockIP={onBlockIP} onUnblockIP={onUnblockIP} onBlockFingerprint={onBlockFingerprint} onUnblockFingerprint={onUnblockFingerprint} backendOnline={backendOnline} />;
+      case 'Blocked IPs': return <BlockedIPsPage data={safeData} onBlockIP={onBlockIP} onUnblockIP={onUnblockIP} onBlockFingerprint={onBlockFingerprint} onUnblockFingerprint={onUnblockFingerprint} onUnblockClient={onUnblockClient} backendOnline={backendOnline} />;
       case 'Settings': return <SettingsPage settings={settings} setSettings={setSettings} data={safeData} backendOnline={backendOnline} />;
       default: return <div>Page not found</div>;
     }

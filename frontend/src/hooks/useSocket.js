@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { io } from 'socket.io-client'
+import { generateFingerprint } from '../utils/fingerprint'
+
 const BACKEND = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001'
 
 export const useSocket = ({
@@ -13,12 +15,15 @@ export const useSocket = ({
   onBlockedAttempt,
   onIPBlocked,
   onIPUnblocked,
+  onClientUnblocked,
   onFingerprintBlocked,
   onVPNDetected,
   onHoneyTrap,
   onSuspiciousLogin,
   onAttackerAutoBlocked,
-  onEmployeesRegenerated
+  onEmployeesRegenerated,
+  onBridgeEvent,
+  onAttackerRedirected
 }) => {
   const socketRef = useRef(null)
   const [connected, setConnected] = useState(false)
@@ -35,12 +40,15 @@ export const useSocket = ({
     onBlockedAttempt,
     onIPBlocked,
     onIPUnblocked,
+    onClientUnblocked,
     onFingerprintBlocked,
     onVPNDetected,
     onHoneyTrap,
     onSuspiciousLogin,
     onAttackerAutoBlocked,
-    onEmployeesRegenerated
+    onEmployeesRegenerated,
+    onBridgeEvent,
+    onAttackerRedirected
   })
 
   useEffect(() => {
@@ -55,12 +63,15 @@ export const useSocket = ({
       onBlockedAttempt,
       onIPBlocked,
       onIPUnblocked,
+      onClientUnblocked,
       onFingerprintBlocked,
       onVPNDetected,
       onHoneyTrap,
       onSuspiciousLogin,
       onAttackerAutoBlocked,
-      onEmployeesRegenerated
+      onEmployeesRegenerated,
+      onBridgeEvent,
+      onAttackerRedirected
     }
   })
 
@@ -74,11 +85,22 @@ export const useSocket = ({
     })
     socketRef.current = socket
 
-    socket.on('connect', () => {
+    socket.on('connect', async () => {
       setConnected(true)
       socket.emit('join_admin')
       console.log('[Socket] Connected:', socket.id)
+
+      // Register device fingerprint room on connect
+      try {
+        const fp = await generateFingerprint()
+        if (fp) {
+          socket.emit('register_device', { fingerprint: fp })
+        }
+      } catch (e) {
+        console.warn('[Socket] Could not register fingerprint room:', e.message)
+      }
     })
+
     socket.on('disconnect', () => {
       setConnected(false)
     })
@@ -103,6 +125,7 @@ export const useSocket = ({
     socket.on('blocked_attempt', data => handlersRef.current.onBlockedAttempt?.(data))
     socket.on('ip_blocked', data => handlersRef.current.onIPBlocked?.(data))
     socket.on('ip_unblocked', data => handlersRef.current.onIPUnblocked?.(data))
+    socket.on('client_unblocked', data => handlersRef.current.onClientUnblocked?.(data))
     socket.on('fingerprint_blocked', data => handlersRef.current.onFingerprintBlocked?.(data))
     socket.on('vpn_detected', data => {
       console.log('[Socket] vpn_detected:', data)
@@ -131,6 +154,19 @@ export const useSocket = ({
     socket.on('employees_regenerated', data => {
       console.log('[Socket] Employees regenerated:', data)
       handlersRef.current.onEmployeesRegenerated?.(data)
+    })
+
+    // Bridge events from Finance Portal
+    socket.on('bridge_event', data => {
+      console.log('[Socket] bridge_event:', data)
+      window.dispatchEvent(new CustomEvent('bridge_event', { detail: data }))
+      handlersRef.current.onBridgeEvent?.(data)
+    })
+
+    socket.on('attacker_redirected_to_honeypot', data => {
+      console.log('[Socket] Attacker redirected from Finance Portal:', data)
+      window.dispatchEvent(new CustomEvent('attacker_redirected_to_honeypot', { detail: data }))
+      handlersRef.current.onAttackerRedirected?.(data)
     })
 
     const pingInterval = setInterval(() => {

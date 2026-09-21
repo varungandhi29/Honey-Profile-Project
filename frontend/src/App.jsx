@@ -9,11 +9,13 @@ import LoginPage from './pages/LoginPage'
 import AdminDashboard from './pages/AdminDashboard'
 import DeceptionDashboard from './pages/DeceptionDashboard'
 import BlockedScreen from './components/BlockedScreen'
+import UnblockedScreen from './components/UnblockedScreen'
 
 const BACKEND = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001'
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState(null)
+  const [unblockedData, setUnblockedData] = useState(null)
   const [appBlocked, setAppBlocked] = useState(() => {
     try {
       const saved = localStorage.getItem('honeyshield_blocked')
@@ -50,21 +52,66 @@ export default function App() {
     return () => engineRef.current?.destroy()
   }, [])
 
-  // Check persistent block status on mount
+  // Check persistent block status on mount — verify with backend check-status as source of truth
   useEffect(() => {
     const checkPersistentBlock = async () => {
       try {
         const saved = localStorage.getItem('honeyshield_blocked')
+        let isLocallyBlocked = false
         if (saved) {
           const parsed = JSON.parse(saved)
           if (parsed.blocked) {
+            isLocallyBlocked = true
             setAppBlocked(true)
             setAppBlockedReason(parsed.reason || 'IP_BLOCKED')
+          }
+        }
+
+        // Verify with backend check-status as authoritative source of truth
+        const res = await fetch(`${BACKEND}/api/blocklist/check-status`, { signal: AbortSignal.timeout(3000) })
+        if (res.ok) {
+          const status = await res.json()
+          if (status.blocked === false) {
+            localStorage.removeItem('honeyshield_blocked')
+            localStorage.removeItem('honeyshield_blocked_ips')
+            setAppBlocked(false)
+            setAppBlockedReason(null)
+            if (isLocallyBlocked) {
+              setUnblockedData({
+                ip: 'Your IP',
+                timestamp: new Date().toISOString()
+              })
+            }
+          } else if (status.blocked === true) {
+            setAppBlocked(true)
+            setAppBlockedReason('IP_BLOCKED')
           }
         }
       } catch {}
     }
     checkPersistentBlock()
+  }, [])
+
+  // Verify admin session on mount
+  useEffect(() => {
+    const verifyAdmin = async () => {
+      const token = sessionStorage.getItem('honeyshield_admin_token')
+      if (token) {
+        try {
+          const r = await fetch(`${BACKEND}/api/auth/verify`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+          })
+          const d = await r.json()
+          if (d.authenticated && d.user) {
+            setCurrentUser({ ...d.user, isAdmin: true })
+            sessionIdRef.current = `ADMIN-${Date.now()}`
+          } else {
+            sessionStorage.removeItem('honeyshield_admin_token')
+          }
+        } catch {}
+      }
+    }
+    verifyAdmin()
   }, [])
 
   // Health checks & data sync
@@ -90,6 +137,26 @@ export default function App() {
   useEffect(() => {
     currentUserRef.current = currentUser
   }, [currentUser])
+
+  // Handle client unblock event
+  const handleClientUnblocked = useCallback((info) => {
+    const wasBlocked = appBlocked || vpnBlocked || !!localStorage.getItem('honeyshield_blocked')
+    try {
+      localStorage.removeItem('honeyshield_blocked')
+      localStorage.removeItem('honeyshield_blocked_ips')
+    } catch {}
+    setAppBlocked(false)
+    setAppBlockedReason(null)
+    setVpnBlocked(false)
+
+    // C6: Only show UnblockedScreen if client was previously in a blocked state
+    if (wasBlocked) {
+      setUnblockedData({
+        ip: info?.ip || 'Your IP',
+        timestamp: info?.timestamp || new Date().toISOString()
+      })
+    }
+  }, [appBlocked, vpnBlocked])
 
   // Socket.io — always connected
   const { connected: socketConnected, latency } = useSocket({
@@ -177,20 +244,24 @@ export default function App() {
     },
     onIPUnblocked: (data) => {
       engineRef.current?.unblockIP(data.ip);
-      try { localStorage.removeItem('honeyshield_blocked'); } catch {}
-      setAppBlocked(false);
-      setAppBlockedReason(null);
+      handleClientUnblocked(data);
       addToast(`✅ IP ${data.ip} unblocked`, 'success');
     },
+    onClientUnblocked: (data) => {
+      engineRef.current?.unblockIP(data.ip);
+      handleClientUnblocked(data);
+      addToast(`✅ Client ${data.ip || ''} completely unblocked`, 'success');
+    },
     onFingerprintUnblocked: (data) => {
-      try { localStorage.removeItem('honeyshield_blocked'); } catch {}
-      setAppBlocked(false);
-      setAppBlockedReason(null);
+      handleClientUnblocked(data);
       addToast(`✅ Fingerprint unblocked`, 'success');
     },
     onVPNDetected: (data) => {
       alertEngine.playVPNDetected()
       addToast(`🚨 VPN AUTO-BLOCKED: ${data.ip} detected as ${data.label}`, 'critical')
+      setVpnInfo({ ip: data.ip, label: data.label })
+      setAppBlockedReason('VPN_PROXY_DETECTED')
+      setAppBlocked(true)
     },
     onHoneyTrap: (data) => {
       console.log('[Socket] HONEY TRAP TRIGGERED:', data)
@@ -212,6 +283,19 @@ export default function App() {
     onEmployeesRegenerated: (data) => {
       console.log('[Socket] Employees regenerated:', data)
       addToast(`🔄 Regenerated ${data.count} decoy employee accounts`, 'info')
+    },
+    onBridgeEvent: (data) => {
+      const icon = data.type === 'ATTACKER_REDIRECTED' ? '🔀' : data.type === 'SUSPICIOUS_ACTIVITY' ? '⚠️' : '📝'
+      const severity = data.type === 'ATTACKER_REDIRECTED' ? 'critical' : data.type === 'SUSPICIOUS_ACTIVITY' ? 'warning' : 'info'
+      addToast(`${icon} [Finance Portal] ${data.message || data.type}: ${data.ip}`, severity)
+      if (data.attemptNumber >= 4) alertEngine.playHigh()
+    },
+    onAttackerRedirected: (data) => {
+      console.log('[Bridge] Attacker redirected:', data)
+      alertEngine.startContinuousAlert('CRITICAL', 8000)
+      alertEngine.playPoliceSiren(5)
+      setForceUpdate(p => p + 1)
+      addToast(`🔀 REDIRECTED: Attacker from Finance Portal now in HoneyShield — ${data.ip}`, 'critical')
     }
   })
 
@@ -285,6 +369,14 @@ export default function App() {
     return locData;
   }, [])
 
+  const getAdminAuthHeaders = useCallback(() => {
+    const token = sessionStorage.getItem('honeyshield_admin_token')
+    return {
+      'Content-Type': 'application/json',
+      ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+    }
+  }, [])
+
   const handleLogin = useCallback(async (credentials) => {
     setLoginError('')
     requestPermission()
@@ -292,6 +384,35 @@ export default function App() {
     const fingerprint = await generateFingerprint()
     const browser = location.browser || 'Browser'
     const os = location.os || navigator.platform || 'Desktop'
+
+    // Admin direct authentication via /api/auth/admin-login
+    try {
+      const res = await fetch(`${BACKEND}/api/auth/admin-login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: credentials.username, password: credentials.password })
+      })
+      const data = await res.json()
+      if (res.ok && data.success && data.token) {
+        sessionStorage.setItem('honeyshield_admin_token', data.token)
+        const adminUser = { ...data.user, role: 'ADMIN', isAdmin: true }
+        setCurrentUser(adminUser)
+        sessionIdRef.current = `ADMIN-${Date.now()}`
+        addToast('Welcome Admin!', 'success')
+        return
+      } else if (res.status === 401 && data.isAdminUser) {
+        // Admin credentials incorrect
+        setLoginError('Invalid admin credentials')
+        return
+      } else if (!res.ok && res.status !== 401) {
+        setLoginError(data.error || 'Authentication error')
+        return
+      }
+    } catch (err) {
+      console.error('[ADMIN LOGIN] Error:', err.message)
+      setLoginError('Unable to connect to authentication server')
+      return
+    }
 
     const loginData = {
       username: credentials.username,
@@ -315,9 +436,10 @@ export default function App() {
       const data = await res.json()
 
       if (res.status === 403 || data.blocked) {
-        // Blocked — show appropriate screen
+        // Blocked — show containment screen with active polling
         setVpnInfo({ ip: location.ip || '127.0.0.1', label: data.reason || 'Attack Detected' })
-        setVpnBlocked(true)
+        setAppBlockedReason(data.reason || 'IP_BLOCKED')
+        setAppBlocked(true)
         alertEngine.playCritical()
         return
       }
@@ -329,37 +451,28 @@ export default function App() {
       }
 
       if (data.success) {
-        // Successful login — trapped or admin
-        if (data.user?.username === 'admin' || credentials.username === 'admin') {
-          // Admin login
-          const adminUser = { ...data.user, role: 'ADMIN', isAdmin: true }
-          setCurrentUser(adminUser)
-          sessionIdRef.current = `ADMIN-${Date.now()}`
-          addToast('Welcome Admin!', 'success')
-        } else {
-          // Attacker trapped in fake employee portal
-          const trappedUser = {
-            ...data.user,
-            sessionId: data.sessionId,
-            role: 'ATTACKER',
-            isTrapped: true
-          }
-          setCurrentUser(trappedUser)
-          sessionIdRef.current = data.sessionId
-          // Register session with engine
-          engineRef.current?.registerRealSession({
-            sessionId: data.sessionId,
-            username: data.user.username,
-            role: 'ATTACKER',
-            ...location,
-            fingerprint,
-            isHoneypotTrap: true,
-            trappedEmployee: data.user.name,
-            trappedRole: data.user.role,
-            trappedDept: data.user.dept
-          })
-          addToast(`Logged in as ${data.user.name}`, 'info')
+        // Attacker trapped in fake employee portal — NEVER admin
+        const trappedUser = {
+          ...data.user,
+          sessionId: data.sessionId,
+          role: 'ATTACKER',
+          isTrapped: true
         }
+        setCurrentUser(trappedUser)
+        sessionIdRef.current = data.sessionId
+        // Register session with engine
+        engineRef.current?.registerRealSession({
+          sessionId: data.sessionId,
+          username: data.user.username,
+          role: 'ATTACKER',
+          ...location,
+          fingerprint,
+          isHoneypotTrap: true,
+          trappedEmployee: data.user.name,
+          trappedRole: data.user.role,
+          trappedDept: data.user.dept
+        })
+        addToast(`Logged in as ${data.user.name}`, 'info')
       }
     } catch (err) {
       console.error('[LOGIN] Error:', err)
@@ -368,6 +481,14 @@ export default function App() {
   }, [getRealLocation, requestPermission, addToast])
 
   const handleLogout = useCallback(async () => {
+    const adminToken = sessionStorage.getItem('honeyshield_admin_token')
+    if (adminToken && backendOnline) {
+      fetch(`${BACKEND}/api/auth/admin-logout`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${adminToken}` }
+      }).catch(() => {})
+      sessionStorage.removeItem('honeyshield_admin_token')
+    }
     if (backendOnline && sessionIdRef.current) {
       fetch(`${BACKEND}/api/session/${sessionIdRef.current}`, { method:'DELETE' }).catch(() => {})
     }
@@ -395,7 +516,7 @@ export default function App() {
       try {
         const res = await fetch(`${BACKEND}/api/blocklist`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getAdminAuthHeaders(),
           body: JSON.stringify({
             ip, blockedBy: currentUser?.username || 'admin',
             reason, permanent: true
@@ -411,7 +532,7 @@ export default function App() {
     } else {
       addToast(`🚫 IP ${ip} blocked — alert cleared`, 'warning')
     }
-  }, [backendOnline, currentUser, addToast])
+  }, [backendOnline, currentUser, addToast, getAdminAuthHeaders])
 
   const handleUnblockIP = useCallback(async (ip) => {
     engineRef.current?.unblockIP(ip)
@@ -425,11 +546,14 @@ export default function App() {
 
     if (backendOnline) {
       try {
-        await fetch(`${BACKEND}/api/blocklist/${encodeURIComponent(ip)}`, { method: 'DELETE' })
+        await fetch(`${BACKEND}/api/blocklist/${encodeURIComponent(ip)}`, {
+          method: 'DELETE',
+          headers: getAdminAuthHeaders()
+        })
         addToast(`✅ IP ${ip} unblocked`, 'success')
       } catch { addToast(`✅ IP ${ip} unblocked locally`, 'success') }
     }
-  }, [backendOnline, addToast])
+  }, [backendOnline, addToast, getAdminAuthHeaders])
 
   const handleBlockFingerprint = useCallback(async (fingerprint, reason = 'Manual block by admin') => {
     if (!fingerprint) return
@@ -440,7 +564,7 @@ export default function App() {
       try {
         const res = await fetch(`${BACKEND}/api/blocklist/fingerprint`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getAdminAuthHeaders(),
           body: JSON.stringify({
             fingerprint, blockedBy: currentUser?.username || 'admin',
             reason
@@ -456,17 +580,42 @@ export default function App() {
     } else {
       addToast(`🚫 Fingerprint blocked`, 'warning')
     }
-  }, [backendOnline, currentUser, addToast])
+  }, [backendOnline, currentUser, addToast, getAdminAuthHeaders])
 
   const handleUnblockFingerprint = useCallback(async (fingerprint) => {
     if (!fingerprint) return
     if (backendOnline) {
       try {
-        await fetch(`${BACKEND}/api/blocklist/fingerprint/${encodeURIComponent(fingerprint)}`, { method: 'DELETE' })
+        await fetch(`${BACKEND}/api/blocklist/fingerprint/${encodeURIComponent(fingerprint)}`, {
+          method: 'DELETE',
+          headers: getAdminAuthHeaders()
+        })
         addToast(`✅ Fingerprint ${fingerprint.substr(0,8)}... unblocked`, 'success')
       } catch { addToast(`✅ Fingerprint unblocked locally`, 'success') }
     }
-  }, [backendOnline, addToast])
+  }, [backendOnline, addToast, getAdminAuthHeaders])
+
+  // Full client unblock (IP + Fingerprint + Conditional VPN Exemption)
+  const handleUnblockClient = useCallback(async ({ ip, fingerprint, reason }) => {
+    if (backendOnline) {
+      try {
+        const res = await fetch(`${BACKEND}/api/blocklist/unblock-client`, {
+          method: 'POST',
+          headers: getAdminAuthHeaders(),
+          body: JSON.stringify({ ip, fingerprint, reason })
+        })
+        const data = await res.json()
+        if (data.success) {
+          addToast(`✅ Client ${ip || ''} completely unblocked`, 'success')
+        } else {
+          addToast(`⚠️ Client unblock partially completed`, 'warning')
+        }
+      } catch (e) {
+        addToast(`Failed to unblock client: ${e.message}`, 'critical')
+      }
+    }
+    if (ip) engineRef.current?.unblockIP(ip)
+  }, [backendOnline, addToast, getAdminAuthHeaders])
 
   useEffect(() => {
     if (!currentUser || !backendOnline) return
@@ -547,37 +696,33 @@ export default function App() {
     return null
   }, [backendOnline, currentUser, handleLogout, addToast])
 
-  if (vpnBlocked) return (
-    <div style={{ position:'fixed', inset:0, background:'#050008', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', zIndex:9999 }}>
-      <div style={{ fontSize:'72px', marginBottom:'24px', animation:'pulse 1s infinite' }}>🛡️</div>
-      <h1 style={{ color:'#FF4444', fontSize:'32px', fontWeight:900, marginBottom:'16px', fontFamily:'monospace', textAlign:'center' }}>
-        CONNECTION BLOCKED
-      </h1>
-      <div style={{ padding:'8px 20px', background:'rgba(255,68,68,0.15)', border:'1px solid #FF4444', borderRadius:'6px', marginBottom:'20px' }}>
-        <span style={{ color:'#FF4444', fontSize:'14px', fontWeight:700 }}>{vpnInfo.label || 'VPN/Proxy'} DETECTED</span>
-      </div>
-      <p style={{ color:'#FF8888', fontSize:'15px', maxWidth:'480px', textAlign:'center', lineHeight:1.8, marginBottom:'24px' }}>
-        Your connection has been identified as a VPN, proxy, or datacenter IP.
-        Access is automatically denied and your IP has been permanently blocked.
-        This attempt has been logged with timestamp and reported to the administrator.
-      </p>
-      <div style={{ padding:'16px 24px', background:'rgba(255,68,68,0.08)', border:'1px solid rgba(255,68,68,0.3)', borderRadius:'8px', fontFamily:'monospace', fontSize:'13px', color:'#FF6666', textAlign:'center' }}>
-        <div>IP Address: {vpnInfo.ip}</div>
-        <div>Flagged As: {vpnInfo.label}</div>
-        <div>Time: {new Date().toLocaleString()}</div>
-        <div style={{ marginTop:'8px', color:'#FF4444', fontWeight:700 }}>This incident has been permanently logged</div>
-      </div>
-      <style>{`@keyframes pulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.05)} }`}</style>
-    </div>
-  )
-
   const currentAttackerSession = data.sessions?.find(s => s.sessionId === sessionIdRef.current) || {
-    ip: '127.0.0.1',
+    ip: vpnInfo.ip || '127.0.0.1',
     username: currentUser?.username,
     role: currentUser?.role
   }
 
-  if (appBlocked) return <BlockedScreen reason={appBlockedReason} session={currentAttackerSession} />
+  // Gating UnblockedScreen per C6 (shows only if previously blocked)
+  if (unblockedData) {
+    return (
+      <UnblockedScreen
+        info={unblockedData}
+        onContinue={() => setUnblockedData(null)}
+      />
+    )
+  }
+
+  // Blocked Screen with 4000ms polling, visibility pause, 429 backoff per C2
+  if (appBlocked || vpnBlocked) {
+    return (
+      <BlockedScreen
+        reason={appBlockedReason || (vpnBlocked ? 'VPN_PROXY_DETECTED' : 'IP_BLOCKED')}
+        session={currentAttackerSession}
+        onUnblocked={handleClientUnblocked}
+      />
+    )
+  }
+
   if (!currentUser) return (<><ToastContainer /><LoginPage onLogin={handleLogin} loginError={loginError} /></>)
   if (currentUser.role === 'ATTACKER') return (<><ToastContainer /><DeceptionDashboard currentUser={currentUser} onLogout={handleLogout} onAttackerAction={handleAttackerAction} /></>)
   return (
@@ -597,6 +742,7 @@ export default function App() {
         onUnblockIP={handleUnblockIP}
         onBlockFingerprint={handleBlockFingerprint}
         onUnblockFingerprint={handleUnblockFingerprint}
+        onUnblockClient={handleUnblockClient}
       />
     </>
   )

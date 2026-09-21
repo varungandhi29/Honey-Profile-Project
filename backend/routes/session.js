@@ -11,8 +11,10 @@ import { cache } from '../services/cacheService.js'
 import { calculateRisk, getState, getAIPrediction } from '../services/riskEngine.js'
 import { checkIPReputation } from '../services/ipReputationService.js'
 import { createAlert } from '../services/alertService.js'
+import { isAdminAuthenticated } from '../middleware/auth.js'
 import { broadcastAttack, broadcastHoney, broadcastSessionUpdate, broadcast } from '../services/broadcastService.js'
 import logger from '../middleware/logger.js'
+import { encrypt } from '../services/dataVaultService.js'
 const router = express.Router()
 
 // GET /api/session/init — detect real IP + geo + device
@@ -29,8 +31,9 @@ router.post('/register', async (req, res) => {
   try {
     const data = req.body
 
-    // Exempt ADMIN accounts
-    if (data.role !== 'ADMIN' && data.username !== 'admin') {
+    // C3: Gate admin exemption on an authenticated admin session, not client-supplied role
+    const adminAuth = await isAdminAuthenticated(req)
+    if (!adminAuth) {
       // Check 1: IP blocked in Redis cache
       if (data.ip) {
         const cachedBlock = await cache.get(`blocked:${data.ip}`)
@@ -110,7 +113,7 @@ router.post('/register', async (req, res) => {
 
       // Check 4: VPN/proxy detection
       if (data.ip) {
-        const reputation = checkIPReputation(data.ip)
+        const reputation = await checkIPReputation(data.ip)
         if (reputation.suspicious) {
           logger.warn(`[VPN AUTO-BLOCK] ${data.ip} detected as ${reputation.label} — auto-blocking`)
 
@@ -173,17 +176,41 @@ router.post('/register', async (req, res) => {
       }
     }
 
-    let session = { ...data }
+    const sessionId = data.sessionId || `SESSION-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`
+    let session = {
+      ...data,
+      sessionId,
+      isActive: true,
+      isBlocked: false,
+      logoutTime: null
+    }
     if (mongoose.connection.readyState === 1) {
       try {
+        if (data.ip || data.fingerprint) {
+          const clearQuery = []
+          if (data.ip) clearQuery.push({ ip: data.ip })
+          if (data.fingerprint && typeof data.fingerprint === 'string') {
+            clearQuery.push({ fingerprintHash: data.fingerprint }, { 'fingerprint.hash': data.fingerprint })
+          }
+          await Session.updateMany(
+            { $or: clearQuery, isBlocked: true },
+            { isBlocked: false }
+          )
+        }
+
         session = await Session.findOneAndUpdate(
-          { sessionId: data.sessionId },
+          { sessionId },
           {
             ...data,
+            sessionId,
             fingerprintHash: typeof data.fingerprint === 'string' ? data.fingerprint : null,
             state: data.role === 'ATTACKER' ? 'ATTACKER' : 'NORMAL',
             riskScore: data.role === 'ATTACKER' ? 85 : 5,
-            isActive: true, loginTime: new Date(), lastSeen: new Date(),
+            isActive: true,
+            isBlocked: false,
+            logoutTime: null,
+            loginTime: new Date(),
+            lastSeen: new Date(),
             fingerprint: {
               hash: typeof data.fingerprint === 'string' ? data.fingerprint : undefined,
               deviceId: (data.ip || '').replace(/\./g,'').substr(0,8),
@@ -197,8 +224,8 @@ router.post('/register', async (req, res) => {
         logger.warn(`[REGISTER DB SAVE ERROR] ${err.message}`)
       }
     }
-    await cache.set(`session:${data.sessionId}`, {
-      sessionId: data.sessionId, username: data.username, role: data.role,
+    await cache.set(`session:${sessionId}`, {
+      sessionId, username: data.username, role: data.role,
       ip: data.ip, country: data.country, city: data.city,
       lat: data.lat, lng: data.lng, state: session.state || 'NORMAL', riskScore: session.riskScore || 5
     })
@@ -287,7 +314,7 @@ router.post('/attack', async (req, res) => {
     }
 
     // Check 4: Real-time IP reputation on EVERY attack (mid-session auto block if VPN/proxy)
-    const reputation = checkIPReputation(sourceIP)
+    const reputation = await checkIPReputation(sourceIP)
     if (reputation.suspicious) {
       logger.warn(`[VPN ATTACK] ${sourceIP} is ${reputation.label} — auto-blocking mid-session`)
       if (mongoose.connection.readyState === 1) {
@@ -394,7 +421,7 @@ router.post('/honey', async (req, res) => {
       sessionId, attackerIP: attackerIP || 'Unknown',
       attackerCountry: attackerCountry || 'Unknown',
       action: action || 'READ', fakeTarget: fakeTarget || '/unknown',
-      fakeCredential: fakeCredential || null, responseSimulated: '200 OK',
+      fakeCredential: fakeCredential ? encrypt(fakeCredential) : null, responseSimulated: '200 OK',
       responseTime: Math.floor(Math.random() * 200 + 50)
     }
     let session = null
@@ -478,7 +505,8 @@ router.post('/heartbeat', async (req, res) => {
       })
     }
 
-    const isBlocked = session?.role !== 'ADMIN' && session?.username !== 'admin' && (session?.isBlocked || false)
+    const adminAuth = await isAdminAuthenticated(req)
+    const isBlocked = !adminAuth && (session?.isBlocked || false)
     res.json({ success: true, blocked: isBlocked })
   } catch (err) { res.status(500).json({ error: err.message }) }
 })

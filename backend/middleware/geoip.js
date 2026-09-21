@@ -2,10 +2,7 @@ import geoip from 'geoip-lite'
 import { UAParser } from 'ua-parser-js'
 
 export const detectLocation = (req) => {
-  const rawIP =
-    req.headers['x-forwarded-for']?.split(',')[0].trim() ||
-    req.headers['x-real-ip'] ||
-    req.socket.remoteAddress || '0.0.0.0'
+  const rawIP = req.ip || req.socket?.remoteAddress || '0.0.0.0'
   const ip = (rawIP === '::1' || rawIP === '127.0.0.1' || rawIP.startsWith('::ffff:127'))
     ? '8.8.8.8'
     : rawIP.replace('::ffff:', '')

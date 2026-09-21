@@ -2,7 +2,9 @@ import React, { useState, useEffect, useId } from 'react'
 import { ShieldAlert, Terminal, Download, AlertTriangle, Cpu, Globe, Lock, RefreshCw, XCircle, Skull, FileText, CheckCircle } from 'lucide-react'
 import { generateFingerprint } from '../utils/fingerprint'
 
-export default function BlockedScreen({ reason, session, honeyCount = 4 }) {
+const BACKEND = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001'
+
+export default function BlockedScreen({ reason, session, honeyCount = 4, onUnblocked }) {
   const [forensics, setForensics] = useState({
     ip: session?.ip || 'Detecting...',
     country: session?.country || 'Detecting...',
@@ -101,6 +103,71 @@ export default function BlockedScreen({ reason, session, honeyCount = 4 }) {
     fetchEvidence()
     return () => { isMounted = false }
   }, [session])
+
+  // C2: Polling fallback for unblock status (4000ms normal, pause on tab hide, 10s on 429)
+  useEffect(() => {
+    let timeoutId = null
+    let pollInterval = 4000
+    let isCancelled = false
+
+    const checkStatus = async () => {
+      if (isCancelled) return
+
+      // Pause polling if tab is backgrounded
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        timeoutId = setTimeout(checkStatus, pollInterval)
+        return
+      }
+
+      try {
+        const fpParam = forensics.fingerprint && forensics.fingerprint !== 'Computing...'
+          ? `?fingerprint=${encodeURIComponent(forensics.fingerprint)}`
+          : ''
+        const res = await fetch(`${BACKEND}/api/blocklist/check-status${fpParam}`)
+
+        if (res.status === 429) {
+          // HTTP 429 rate limit backoff to 10s per C2
+          pollInterval = 10000
+          timeoutId = setTimeout(checkStatus, pollInterval)
+          return
+        }
+
+        pollInterval = 4000
+        if (res.ok) {
+          const data = await res.json()
+          if (data.blocked === false) {
+            if (onUnblocked) {
+              onUnblocked({ ip: forensics.ip, timestamp: new Date().toISOString() })
+            }
+            return
+          }
+        }
+      } catch (e) {
+        // Network errors silently handled; retry on next tick
+      }
+
+      if (!isCancelled) {
+        timeoutId = setTimeout(checkStatus, pollInterval)
+      }
+    }
+
+    timeoutId = setTimeout(checkStatus, pollInterval)
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        clearTimeout(timeoutId)
+        timeoutId = setTimeout(checkStatus, 500)
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+
+    return () => {
+      isCancelled = true
+      clearTimeout(timeoutId)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+  }, [forensics.fingerprint, forensics.ip, onUnblocked])
 
   const trapFiles = [
     { name: '/var/www/backup/payroll_2025.xlsx', action: 'DATA_EXFIL_ATTEMPT', risk: 'CRITICAL', honey: true },

@@ -1,7 +1,14 @@
 import React, { useState } from 'react'
 
 const LoginPage = ({ onLogin, loginError }) => {
-  const [username, setUsername] = useState('')
+  const [username, setUsername] = useState(() => {
+    try {
+      const params = new URLSearchParams(window.location.search)
+      return params.get('user') || ''
+    } catch {
+      return ''
+    }
+  })
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
 

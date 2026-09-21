@@ -1,4 +1,7 @@
+import mongoose from 'mongoose'
 import logger from '../middleware/logger.js'
+import { cache } from './cacheService.js'
+import ExemptedIP from '../models/ExemptedIP.js'
 
 // Known VPN/proxy/datacenter CIDR ranges
 // These are public ranges — not private user ranges
@@ -29,8 +32,42 @@ const isInCidr = (ip, cidr) => {
   return (ipToNumber(ip) & mask) === (ipToNumber(range) & mask)
 }
 
-export const checkIPReputation = (ip) => {
-  if (!ip || ip === 'Unknown' || ip === '8.8.8.8') {
+/**
+ * Check if an IP has an active 24h admin exemption.
+ * Checks Redis cache first; falls back to MongoDB and re-caches remaining TTL.
+ */
+export const checkIPExemption = async (ip) => {
+  if (!ip || ip === 'Unknown' || ip === '127.0.0.1') return false
+  try {
+    // 1. Redis cache first
+    const cached = await cache.get(`exempt:vpn:${ip}`)
+    if (cached) {
+      return true
+    }
+
+    // 2. MongoDB fallback
+    if (mongoose.connection.readyState === 1) {
+      const dbExempt = await ExemptedIP.findOne({
+        ip,
+        expiresAt: { $gt: new Date() }
+      })
+      if (dbExempt) {
+        const remainingSeconds = Math.max(1, Math.floor((new Date(dbExempt.expiresAt).getTime() - Date.now()) / 1000))
+        await cache.set(`exempt:vpn:${ip}`, { exempted: true, exemptedBy: dbExempt.exemptedBy }, remainingSeconds)
+        return true
+      }
+    }
+  } catch (err) {
+    logger.warn(`[EXEMPTION CHECK ERROR] ${err.message}`)
+  }
+  return false
+}
+
+/**
+ * Returns raw reputation without exemption checking.
+ */
+export const getRawReputation = (ip) => {
+  if (!ip || ip === 'Unknown' || ip === '8.8.8.8' || ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1') {
     logger.info(`[REPUTATION] ${ip || 'Unknown'} → CLEAN`)
     return { suspicious: false, reason: null, riskBonus: 0 }
   }
@@ -53,6 +90,24 @@ export const checkIPReputation = (ip) => {
 
   logger.info(`[REPUTATION] ${ip} → CLEAN`)
   return { suspicious: false, reason: null, riskBonus: 0 }
+}
+
+/**
+ * Check IP reputation. If exempt by admin, returns { suspicious: false, exempt: true }.
+ * Pass { bypassExemption: true } to query raw reputation (used in unblock route for C1).
+ */
+export const checkIPReputation = async (ip, options = {}) => {
+  if (options.bypassExemption || options.raw) {
+    return getRawReputation(ip)
+  }
+
+  const isExempt = await checkIPExemption(ip)
+  if (isExempt) {
+    logger.info(`[REPUTATION] ${ip} → EXEMPT (Admin 24h VPN Exemption Active)`)
+    return { suspicious: false, reason: null, riskBonus: 0, exempt: true }
+  }
+
+  return getRawReputation(ip)
 }
 
 export const isPrivateIP = (ip) => {

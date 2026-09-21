@@ -2,17 +2,18 @@ import express from 'express'
 import axios from 'axios'
 import mongoose from 'mongoose'
 import Session from '../models/Session.js'
+import { requireAdmin } from '../middleware/auth.js'
 const router = express.Router()
 router.get('/health', async (req, res) => {
   try {
-    const r = await axios.get(`${process.env.AI_SERVICE_URL || 'http://localhost:5000'}/health`, { timeout: 1500 });
+    const r = await axios.get(`${process.env.AI_SERVICE_URL || 'http://localhost:8000'}/health`, { timeout: 1500 });
     res.json({ online: true, model_loaded: true, ...r.data })
   } catch {
     res.json({ online: true, model_loaded: true, algorithm: 'Random Forest Threat Classifier (Embedded Heuristic Engine)' })
   }
 })
 
-router.post('/predict/:sessionId', async (req, res) => {
+router.post('/predict/:sessionId', requireAdmin, async (req, res) => {
   try {
     let session = null
     if (mongoose.connection.readyState === 1) {
@@ -25,7 +26,7 @@ router.post('/predict/:sessionId', async (req, res) => {
       })
     }
     try {
-      const r = await axios.post(`${process.env.AI_SERVICE_URL || 'http://localhost:5000'}/predict`, {
+      const r = await axios.post(`${process.env.AI_SERVICE_URL || 'http://localhost:8000'}/predict`, {
         sessionId: req.params.sessionId,
         features: {
           riskScore: session.riskScore, attackCount: session.attackCount,
@@ -51,7 +52,7 @@ router.post('/predict/:sessionId', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
-router.get('/insights', async (req, res) => {
+router.get('/insights', requireAdmin, async (req, res) => {
   try {
     let sessions = []
     if (mongoose.connection.readyState === 1) {

@@ -1,9 +1,11 @@
+import './config.js'
 import express from 'express'
 import { createServer } from 'http'
 import cors from 'cors'
 import helmet from 'helmet'
 import compression from 'compression'
 import dotenv from 'dotenv'
+import fs from 'fs'
 import mongoose from 'mongoose'
 import cron from 'node-cron'
 import { MongoMemoryServer } from 'mongodb-memory-server'
@@ -17,6 +19,8 @@ import aiRoutes from './routes/ai.js'
 import blocklistRoutes from './routes/blocklist.js'
 import vaultRoutes from './routes/vault.js'
 import honeypotRoutes from './routes/honeypot.js'
+import bridgeRoutes from './routes/bridge.js'
+import authRoutes from './routes/auth.js'
 import { seedEmployees } from './services/employeeService.js'
 import { permanentlyBlockAttacker } from './services/attackDetectionService.js'
 import { broadcast } from './services/broadcastService.js'
@@ -24,9 +28,14 @@ import rateLimit from 'express-rate-limit'
 import { apiLimiter } from './middleware/rateLimit.js'
 import logger from './middleware/logger.js'
 import Session from './models/Session.js'
+import { initCache } from './services/cacheService.js'
 
 dotenv.config()
 const app = express()
+
+// Trust single-hop reverse proxy (Railway edge proxy / Cloudflare)
+// Ensures req.ip resolves to the true client IP while preventing X-Forwarded-For spoofing
+app.set('trust proxy', 1)
 
 const httpServer = createServer(app)
 const io = initSocket(httpServer, process.env.FRONTEND_URL)
@@ -68,15 +77,29 @@ const loginLimiter = rateLimit({
   legacyHeaders: false,
 })
 
+import { requireAdmin } from './middleware/auth.js'
+
+if (!process.env.ADMIN_PASSWORD_HASH) {
+  console.error('[FATAL] ADMIN_PASSWORD_HASH is unset in environment. Server refusing to start.')
+  process.exit(1)
+}
+
+if (!process.env.VAULT_ENCRYPTION_KEY || !/^[0-9a-fA-F]{64}$/.test(process.env.VAULT_ENCRYPTION_KEY)) {
+  console.error('[FATAL] VAULT_ENCRYPTION_KEY must be exactly 64 hex characters (32 bytes). Refusing to start.')
+  process.exit(1)
+}
+
 app.use('/api/honeypot/login', loginLimiter)
 app.use('/api/honeypot', honeypotRoutes)
 app.use('/api/session', sessionRoutes)
-app.use('/api/alerts', alertRoutes)
-app.use('/api/export', exportRoutes)
-app.use('/api/analytics', analyticsRoutes)
+app.use('/api/alerts', requireAdmin, alertRoutes)
+app.use('/api/export', requireAdmin, exportRoutes)
+app.use('/api/analytics', requireAdmin, analyticsRoutes)
 app.use('/api/ai', aiRoutes)
 app.use('/api/blocklist', blocklistRoutes)
-app.use('/api/vault', vaultRoutes)
+app.use('/api/vault', requireAdmin, vaultRoutes)
+app.use('/api/bridge', bridgeRoutes)
+app.use('/api/auth', authRoutes)
 
 import path from 'path'
 import { fileURLToPath } from 'url'
@@ -88,49 +111,69 @@ const frontendDist = path.join(__dirname, '../frontend/dist')
 app.use(express.static(frontendDist))
 
 app.get('/api/health', async (req, res) => {
-  res.json({ status: 'ok', version: '2.0.0', mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected', uptime: process.uptime(), timestamp: new Date().toISOString() })
+  res.json({
+    status: 'ok',
+    version: '2.0.0',
+    mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+    mongoUri: mongoUri || (mongoServer ? mongoServer.getUri() : null),
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString()
+  })
 })
 
 mongoose.set('bufferCommands', false)
 
 let mongoServer
-let mongoUri = process.env.MONGODB_URI
+let mongoUri = process.env.MONGODB_URI || process.env.MONGO_URL
 
 const connectDB = async () => {
-  if (!mongoUri || mongoUri === 'mock') {
-    try {
-      logger.info('[DB] Starting In-Memory MongoDB Server...')
-      if (mongoServer) {
-        try { await mongoServer.stop() } catch {}
-      }
-      mongoServer = await MongoMemoryServer.create({
-        instance: { dbName: `honeypot_${Date.now()}` }
-      })
-      mongoUri = mongoServer.getUri()
-      logger.info(`[DB] In-Memory MongoDB Server running at ${mongoUri}`)
-    } catch (err) {
-      logger.error(`[DB] Failed to start In-Memory MongoDB: ${err.message}`)
-    }
-  }
-
-  if (mongoUri && mongoUri.startsWith('mongodb')) {
+  if (mongoUri && mongoUri.startsWith('mongodb') && mongoUri !== 'mock') {
     try {
       await mongoose.connect(mongoUri, {
-        serverSelectionTimeoutMS: 2000
+        serverSelectionTimeoutMS: 5000
       })
-      logger.info('[DB] MongoDB connected successfully')
+      logger.info('[DB] Persistent MongoDB connected successfully')
+      return
     } catch (err) {
-      logger.error(`[DB] MongoDB error: ${err.message}`)
-      if (!mongoServer && mongoUri !== 'mock') {
-        logger.warn('[DB] Connection failed. Retrying with In-Memory MongoDB Server...')
-        mongoUri = 'mock'
-        await connectDB()
+      if (process.env.NODE_ENV === 'production') {
+        logger.error(`[FATAL] Persistent MongoDB connection failed in production: ${err.message}. Refusing to start with ephemeral database.`)
+        process.exit(1)
       }
+      logger.warn(`[DB] Persistent MongoDB connection failed: ${err.message}`)
     }
+  } else if (process.env.NODE_ENV === 'production') {
+    logger.error('[FATAL] Neither MONGODB_URI nor MONGO_URL is configured in production. Refusing to start without persistent database.')
+    process.exit(1)
+  }
+
+  // Development-only fallback:
+  try {
+    logger.warn('[DB WARNING] Starting In-Memory MongoDB Server for development only. Data will NOT persist across restarts!')
+    if (mongoServer) {
+      try { await mongoServer.stop() } catch {}
+    }
+    const instanceOpts = { dbName: `honeypot_${Date.now()}` }
+    try {
+      if (fs.existsSync('D:\\')) {
+        const dDir = path.join('D:\\mongo-tmp', `hp_${Date.now()}`)
+        fs.mkdirSync(dDir, { recursive: true })
+        instanceOpts.dbPath = dDir
+      }
+    } catch {}
+    mongoServer = await MongoMemoryServer.create({
+      binary: { version: '8.2.1' },
+      instance: instanceOpts
+    })
+    mongoUri = mongoServer.getUri()
+    await mongoose.connect(mongoUri, { serverSelectionTimeoutMS: 2000 })
+    logger.info(`[DB] In-Memory MongoDB Server running at ${mongoUri}`)
+  } catch (err) {
+    logger.warn(`[DB] In-Memory MongoDB skipped: ${err.message}`)
   }
 }
 
-connectDB()
+await initCache()
+await connectDB()
 
 mongoose.connection.once('open', async () => {
   logger.info('[DB] MongoDB connected')

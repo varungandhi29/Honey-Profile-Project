@@ -27,7 +27,7 @@ const COUNTRY_COORDS = {
 };
 
 const getSessionCoords = (s) => {
-  if (s && (s.role === 'ADMIN' || s.username === 'admin' || s.country === 'Local' || s.country === 'Localhost')) {
+  if (s && (s.role === 'ADMIN' || s.country === 'Local' || s.country === 'Localhost')) {
     return [73.1, 22.3]; // Admin SOC Core Node in India
   }
   if (s && typeof s.lng === 'number' && typeof s.lat === 'number' && (s.lng !== 0 || s.lat !== 0)) {

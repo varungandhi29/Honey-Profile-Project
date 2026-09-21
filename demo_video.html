@@ -1,0 +1,821 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>HoneyShield v2 — Dual Architecture Demo Video</title>
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <style>
+    @keyframes pulse-glow {
+      0%, 100% { box-shadow: 0 0 15px rgba(59, 130, 246, 0.4); }
+      50% { box-shadow: 0 0 30px rgba(59, 130, 246, 0.8); }
+    }
+    @keyframes red-glow {
+      0%, 100% { box-shadow: 0 0 15px rgba(239, 68, 68, 0.4); }
+      50% { box-shadow: 0 0 30px rgba(239, 68, 68, 0.9); }
+    }
+    @keyframes siren-flash {
+      0%, 100% { background: rgba(239, 68, 68, 0.15); }
+      50% { background: rgba(59, 130, 246, 0.15); }
+    }
+    @keyframes float {
+      0%, 100% { transform: translateY(0px); }
+      50% { transform: translateY(-6px); }
+    }
+    @keyframes scanline {
+      0% { transform: translateY(-100%); }
+      100% { transform: translateY(1000%); }
+    }
+    .crt::after {
+      content: " ";
+      display: block;
+      position: absolute;
+      top: 0; left: 0; bottom: 0; right: 0;
+      background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.03), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.03));
+      z-index: 20;
+      background-size: 100% 3px, 6px 100%;
+      pointer-events: none;
+    }
+    .custom-scroll::-webkit-scrollbar { width: 4px; }
+    .custom-scroll::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+  </style>
+</head>
+<body class="bg-[#0B0F17] text-slate-100 font-sans min-h-screen p-4 md:p-8 flex flex-col items-center">
+
+  <!-- Header -->
+  <div class="w-full max-w-6xl flex flex-col md:flex-row items-start md:items-center justify-between pb-6 mb-6 border-b border-slate-800 gap-4">
+    <div class="flex items-center gap-3">
+      <div class="w-12 h-12 rounded-xl bg-gradient-to-tr from-emerald-500 via-blue-600 to-indigo-600 flex items-center justify-center text-2xl shadow-lg shadow-blue-500/20">
+        🛡️
+      </div>
+      <div>
+        <div class="flex items-center gap-2">
+          <h1 class="text-2xl font-bold text-white tracking-tight">HoneyShield v2</h1>
+          <span class="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-500/20 text-blue-400 border border-blue-500/30">Dual-System Architecture</span>
+        </div>
+        <p class="text-sm text-slate-400">Cinematic Interactive Product Demo Video & Multi-System Showcase</p>
+      </div>
+    </div>
+
+    <!-- Quick Status Pill -->
+    <div class="flex items-center gap-2 bg-slate-900 border border-slate-700/60 px-4 py-2 rounded-xl text-xs font-mono">
+      <span class="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+      <span class="text-slate-300">5 Live Services Active</span>
+      <span class="text-slate-600">|</span>
+      <span class="text-blue-400">Ports 3002 · 3500 · 5173</span>
+    </div>
+  </div>
+
+  <!-- Video Player Stage -->
+  <div class="w-full max-w-6xl bg-slate-950 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl relative flex flex-col">
+    
+    <!-- Player Top Bar -->
+    <div class="bg-slate-900/90 backdrop-blur px-4 py-3 border-b border-slate-800 flex items-center justify-between text-xs text-slate-400">
+      <div class="flex items-center gap-2 font-mono">
+        <span class="flex h-2 w-2 relative">
+          <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+          <span class="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
+        </span>
+        <span class="text-red-400 font-bold tracking-wider">REC</span>
+        <span class="text-slate-500">|</span>
+        <span id="video-resolution" class="text-slate-300 font-semibold">4K UHD · 60 FPS</span>
+        <span class="text-slate-500">·</span>
+        <span id="scene-badge" class="text-blue-400 font-medium">SCENE 1: ARCHITECTURE OVERVIEW</span>
+      </div>
+
+      <div class="flex items-center gap-3">
+        <button id="sound-toggle" onclick="toggleAudio()" class="flex items-center gap-1.5 px-3 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg transition border border-slate-700">
+          <span id="sound-icon">🔊</span>
+          <span id="sound-label">Audio On</span>
+        </button>
+        <button onclick="restartVideo()" class="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg transition border border-slate-700">
+          🔄 Restart
+        </button>
+      </div>
+    </div>
+
+    <!-- Video Canvas Screen Viewport (16:9 aspect ratio) -->
+    <div id="video-viewport" class="w-full aspect-[16/9] bg-[#0A0E17] relative overflow-hidden flex flex-col justify-between select-none">
+      
+      <!-- Video Content Layers -->
+      <div id="scene-container" class="absolute inset-0 p-6 md:p-10 flex flex-col justify-center items-center transition-all duration-700">
+        <!-- Dynamic Scene Content Injected Here -->
+      </div>
+
+      <!-- Live Cursor Simulation -->
+      <div id="virtual-cursor" class="absolute pointer-events-none z-30 transition-all duration-500 flex items-center gap-1 opacity-0">
+        <svg class="w-6 h-6 text-white drop-shadow-[0_2px_8px_rgba(0,0,0,0.8)]" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M4 2l16 12-7.5 1.5L8.5 22 4 2z"/>
+        </svg>
+        <div id="cursor-badge" class="text-[10px] font-mono px-2 py-0.5 rounded bg-blue-600 text-white font-bold shadow-md hidden">
+          Click
+        </div>
+      </div>
+
+      <!-- Siren Overlay (Active on redirect) -->
+      <div id="siren-overlay" class="absolute inset-0 pointer-events-none z-20 opacity-0 transition-opacity duration-300"></div>
+
+      <!-- Narration Subtitles & Explanatory Banner -->
+      <div class="absolute bottom-4 left-6 right-6 z-20 flex justify-center">
+        <div id="subtitle-box" class="bg-slate-950/90 border border-slate-800 backdrop-blur-md px-6 py-3 rounded-xl shadow-2xl max-w-3xl text-center transition-all duration-300">
+          <div id="subtitle-title" class="text-xs font-bold text-blue-400 uppercase tracking-wider mb-0.5 font-mono">
+            System Initialization
+          </div>
+          <div id="subtitle-text" class="text-sm md:text-base text-slate-100 font-medium leading-snug">
+            Welcome to HoneyShield v2 Dual-System Architecture demo.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Video Timeline & Player Controls -->
+    <div class="bg-slate-900 px-6 py-4 border-t border-slate-800 flex flex-col gap-3">
+      
+      <!-- Progress Bar with Chapter Markers -->
+      <div class="relative w-full h-3 bg-slate-800 rounded-full cursor-pointer overflow-hidden group" onclick="seekVideo(event)">
+        <div id="progress-fill" class="h-full bg-gradient-to-r from-blue-500 via-indigo-500 to-emerald-400 rounded-full w-0 transition-all duration-200"></div>
+      </div>
+
+      <!-- Controls Row -->
+      <div class="flex items-center justify-between text-xs text-slate-300">
+        
+        <!-- Play / Pause & Time -->
+        <div class="flex items-center gap-4">
+          <button id="play-btn" onclick="togglePlay()" class="w-10 h-10 rounded-full bg-blue-600 hover:bg-blue-500 text-white flex items-center justify-center font-bold text-base transition shadow-lg shadow-blue-600/30">
+            ▶
+          </button>
+          <div class="font-mono text-sm">
+            <span id="time-current" class="text-white font-semibold">00:00</span>
+            <span class="text-slate-600">/</span>
+            <span id="time-total" class="text-slate-400">02:15</span>
+          </div>
+        </div>
+
+        <!-- Chapter Quick Jump Buttons -->
+        <div class="hidden lg:flex items-center gap-1.5 font-mono text-[11px]">
+          <button onclick="jumpToScene(0)" class="px-2.5 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition">
+            1. Topology
+          </button>
+          <button onclick="jumpToScene(1)" class="px-2.5 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition">
+            2. Real Login
+          </button>
+          <button onclick="jumpToScene(2)" class="px-2.5 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition">
+            3. Brute Force
+          </button>
+          <button onclick="jumpToScene(3)" class="px-2.5 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition">
+            4. Silent Redirect
+          </button>
+          <button onclick="jumpToScene(4)" class="px-2.5 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition">
+            5. Honeypot Sandbox
+          </button>
+          <button onclick="jumpToScene(5)" class="px-2.5 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition">
+            6. Bridge SOC Monitor
+          </button>
+        </div>
+
+        <!-- Playback Speed -->
+        <div class="flex items-center gap-2 font-mono">
+          <span class="text-slate-500">Speed:</span>
+          <select id="speed-select" onchange="setPlaybackSpeed(this.value)" class="bg-slate-800 border border-slate-700 text-slate-200 rounded px-2 py-1 outline-none">
+            <option value="1">1.0x</option>
+            <option value="1.5">1.5x</option>
+            <option value="2">2.0x</option>
+          </select>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Key Architecture Summary Grid -->
+  <div class="w-full max-w-6xl grid grid-cols-1 md:grid-cols-3 gap-6 mt-8">
+    <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 flex flex-col justify-between">
+      <div>
+        <div class="flex items-center justify-between mb-3">
+          <span class="text-blue-400 font-bold text-sm">System 1: Finance Portal</span>
+          <span class="text-[11px] font-mono px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20">Port 3002 / 4000</span>
+        </div>
+        <p class="text-xs text-slate-400 leading-relaxed">
+          Authentic employee portal for executive staff and accountants. Valid logins access revenue telemetry, Q3 reports, invoices, and payroll data.
+        </p>
+      </div>
+      <div class="mt-4 pt-3 border-t border-slate-800 text-[11px] font-mono text-slate-500">
+        Status: <span class="text-emerald-400 font-semibold">Running (MongoDB: financeportal)</span>
+      </div>
+    </div>
+
+    <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 flex flex-col justify-between">
+      <div>
+        <div class="flex items-center justify-between mb-3">
+          <span class="text-purple-400 font-bold text-sm">Bridge Intelligence Layer</span>
+          <span class="text-[11px] font-mono px-2 py-0.5 rounded bg-purple-500/10 text-purple-400 border border-purple-500/20">Port 3500</span>
+        </div>
+        <p class="text-xs text-slate-400 leading-relaxed">
+          Intercepts failed authentication spikes. Tracks failure threshold (3 attempts $\rightarrow$ Silent redirect, 5 attempts $\rightarrow$ Permanent cross-system block).
+        </p>
+      </div>
+      <div class="mt-4 pt-3 border-t border-slate-800 text-[11px] font-mono text-slate-500">
+        Status: <span class="text-emerald-400 font-semibold">Running (Redis + In-Memory)</span>
+      </div>
+    </div>
+
+    <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 flex flex-col justify-between">
+      <div>
+        <div class="flex items-center justify-between mb-3">
+          <span class="text-emerald-400 font-bold text-sm">System 2: HoneyShield Honeypot</span>
+          <span class="text-[11px] font-mono px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Port 5173 / 3001</span>
+        </div>
+        <p class="text-xs text-slate-400 leading-relaxed">
+          High-interaction deception sandbox. Trapped attackers explore decoy databases and files while SOC operators watch full forensic telemetry.
+        </p>
+      </div>
+      <div class="mt-4 pt-3 border-t border-slate-800 text-[11px] font-mono text-slate-500">
+        Status: <span class="text-emerald-400 font-semibold">Running (Socket.io + Deception)</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Audio Synthesis & Video Controller Script -->
+  <script>
+    // Audio Synth Engine (Web Audio API)
+    let audioCtx = null
+    let audioEnabled = true
+
+    function initAudio() {
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)()
+      }
+    }
+
+    function toggleAudio() {
+      audioEnabled = !audioEnabled
+      document.getElementById('sound-icon').textContent = audioEnabled ? '🔊' : '🔇'
+      document.getElementById('sound-label').textContent = audioEnabled ? 'Audio On' : 'Muted'
+      if (audioEnabled) initAudio()
+    }
+
+    function playBeep(freq = 440, type = 'sine', duration = 0.1, gainVal = 0.1) {
+      if (!audioEnabled) return
+      try {
+        initAudio()
+        const osc = audioCtx.createOscillator()
+        const gain = audioCtx.createGain()
+        osc.type = type
+        osc.frequency.setValueAtTime(freq, audioCtx.currentTime)
+        gain.gain.setValueAtTime(gainVal, audioCtx.currentTime)
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration)
+        osc.connect(gain)
+        gain.connect(audioCtx.destination)
+        osc.start()
+        osc.stop(audioCtx.currentTime + duration)
+      } catch (e) {}
+    }
+
+    function playSirenSound() {
+      if (!audioEnabled) return
+      try {
+        initAudio()
+        const now = audioCtx.currentTime
+        const osc = audioCtx.createOscillator()
+        const gain = audioCtx.createGain()
+        osc.type = 'sawtooth'
+        osc.frequency.setValueAtTime(700, now)
+        osc.frequency.linearRampToValueAtTime(1100, now + 0.3)
+        osc.frequency.linearRampToValueAtTime(700, now + 0.6)
+        gain.gain.setValueAtTime(0.12, now)
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.7)
+        osc.connect(gain)
+        gain.connect(audioCtx.destination)
+        osc.start(now)
+        osc.stop(now + 0.7)
+      } catch (e) {}
+    }
+
+    // Video Timeline Definition
+    const SCENES = [
+      {
+        id: 0,
+        title: "Dual-System Architecture Topology",
+        badge: "SCENE 1: ARCHITECTURE OVERVIEW",
+        start: 0,
+        duration: 18,
+        subtitleTitle: "Architecture Overview",
+        subtitleText: "HoneyShield v2 runs two completely decoupled systems: the real AcmeCorp Finance Portal and the HoneyShield Honeypot, linked by an intelligent Bridge Layer.",
+        render: renderScene1
+      },
+      {
+        id: 1,
+        title: "Legitimate Employee Login Flow",
+        badge: "SCENE 2: REAL EMPLOYEE LOGIN",
+        start: 18,
+        duration: 22,
+        subtitleTitle: "Legitimate Access",
+        subtitleText: "Employee John Smith accesses http://localhost:3002. Credentials match database, zero failures logged, and John enters the real corporate portal.",
+        render: renderScene2
+      },
+      {
+        id: 2,
+        title: "Attacker Brute-Force Telemetry",
+        badge: "SCENE 3: BRUTE-FORCE ATTEMPTS",
+        start: 40,
+        duration: 22,
+        subtitleTitle: "Attack Detection",
+        subtitleText: "An adversary from IP 198.51.100.77 attempts dictionary passwords on the Finance Portal. The Bridge Layer intercepts and increments failed attempt telemetry.",
+        render: renderScene3
+      },
+      {
+        id: 3,
+        title: "Silent Intercept & Redirect Trigger",
+        badge: "SCENE 4: SILENT REDIRECT TO HONEYPOT",
+        start: 62,
+        duration: 24,
+        subtitleTitle: "Silent Redirection",
+        subtitleText: "On Attempt #3, the Bridge Layer triggers REDIRECT_TO_HONEYPOT. The Finance Portal seamlessly routes the adversary to port 5173 without revealing the deception.",
+        render: renderScene4
+      },
+      {
+        id: 4,
+        title: "Adversary Trapped in Honeypot Sandbox",
+        badge: "SCENE 5: HONEYPOT SANDBOX TRAP",
+        start: 86,
+        duration: 25,
+        subtitleTitle: "Deception Engagement",
+        subtitleText: "The adversary enters the identical-looking decoy portal, exploring honeypot databases, payroll files, and canary tokens while fully trapped.",
+        render: renderScene5
+      },
+      {
+        id: 5,
+        title: "SOC Command Center & Bridge Monitor",
+        badge: "SCENE 6: UNIFIED SOC BRIDGE MONITOR",
+        start: 111,
+        duration: 24,
+        subtitleTitle: "SOC Defense & Cross-System Block",
+        subtitleText: "HoneyShield admin dashboard sounds siren alerts, streams the live intercept chain in the Bridge Monitor, and synchronizes cross-system IP blocks.",
+        render: renderScene6
+      }
+    ]
+
+    const TOTAL_DURATION = 135 // 2:15 total seconds
+    let currentTime = 0
+    let isPlaying = false
+    let playbackSpeed = 1
+    let lastTimestamp = 0
+    let animationFrameId = null
+
+    function formatTime(sec) {
+      const m = Math.floor(sec / 60).toString().padStart(2, '0')
+      const s = Math.floor(sec % 60).toString().padStart(2, '0')
+      return `${m}:${s}`
+    }
+
+    function getCurrentScene(time) {
+      for (let i = SCENES.length - 1; i >= 0; i--) {
+        if (time >= SCENES[i].start) return SCENES[i]
+      }
+      return SCENES[0]
+    }
+
+    let activeSceneId = -1
+    let sceneTick = 0
+
+    function updatePlayer(time) {
+      document.getElementById('time-current').textContent = formatTime(time)
+      document.getElementById('time-total').textContent = formatTime(TOTAL_DURATION)
+      
+      const pct = (time / TOTAL_DURATION) * 100
+      document.getElementById('progress-fill').style.width = `${pct}%`
+
+      const scene = getCurrentScene(time)
+      document.getElementById('scene-badge').textContent = scene.badge
+      document.getElementById('subtitle-title').textContent = scene.subtitleTitle
+      document.getElementById('subtitle-text').textContent = scene.subtitleText
+
+      if (activeSceneId !== scene.id) {
+        activeSceneId = scene.id
+        sceneTick = 0
+        scene.render(document.getElementById('scene-container'), 0)
+      } else {
+        sceneTick++
+        scene.render(document.getElementById('scene-container'), sceneTick)
+      }
+    }
+
+    function tick(timestamp) {
+      if (!lastTimestamp) lastTimestamp = timestamp
+      const delta = (timestamp - lastTimestamp) / 1000
+      lastTimestamp = timestamp
+
+      if (isPlaying) {
+        currentTime += delta * playbackSpeed
+        if (currentTime >= TOTAL_DURATION) {
+          currentTime = TOTAL_DURATION
+          isPlaying = false
+          document.getElementById('play-btn').textContent = '▶'
+        }
+        updatePlayer(currentTime)
+      }
+
+      animationFrameId = requestAnimationFrame(tick)
+    }
+
+    function togglePlay() {
+      initAudio()
+      isPlaying = !isPlaying
+      document.getElementById('play-btn').textContent = isPlaying ? '⏸' : '▶'
+      if (isPlaying && currentTime >= TOTAL_DURATION) {
+        currentTime = 0
+      }
+    }
+
+    function restartVideo() {
+      currentTime = 0
+      isPlaying = true
+      document.getElementById('play-btn').textContent = '⏸'
+      updatePlayer(0)
+    }
+
+    function jumpToScene(idx) {
+      const scene = SCENES[idx]
+      if (scene) {
+        currentTime = scene.start + 0.1
+        isPlaying = true
+        document.getElementById('play-btn').textContent = '⏸'
+        updatePlayer(currentTime)
+        playBeep(600, 'sine', 0.08)
+      }
+    }
+
+    function seekVideo(e) {
+      const rect = e.currentTarget.getBoundingClientRect()
+      const clickX = e.clientX - rect.left
+      const pct = clickX / rect.width
+      currentTime = pct * TOTAL_DURATION
+      updatePlayer(currentTime)
+      playBeep(500, 'sine', 0.05)
+    }
+
+    function setPlaybackSpeed(val) {
+      playbackSpeed = parseFloat(val) || 1
+    }
+
+    // ==========================================
+    // SCENE RENDERING ENGINES
+    // ==========================================
+
+    // SCENE 1: ARCHITECTURE TOPOLOGY
+    function renderScene1(container, tick) {
+      document.getElementById('siren-overlay').style.opacity = '0'
+      const pulse = Math.sin(tick * 0.1) * 0.5 + 0.5
+
+      container.innerHTML = `
+        <div class="w-full max-w-4xl flex flex-col items-center">
+          <div class="text-center mb-8">
+            <span class="px-3 py-1 bg-blue-500/10 border border-blue-500/30 text-blue-400 rounded-full text-xs font-mono font-semibold">DUAL SYSTEM ARCHITECTURE</span>
+            <h2 class="text-2xl md:text-3xl font-extrabold text-white mt-2">Next-Gen Cyber Deception Topology</h2>
+            <p class="text-xs text-slate-400 mt-1">Real production services isolated from sandboxed honeypot deception layer</p>
+          </div>
+
+          <div class="w-full grid grid-cols-1 md:grid-cols-3 gap-6 items-center">
+            
+            <!-- Node 1: Real Finance Portal -->
+            <div class="bg-slate-900/90 border border-blue-500/40 rounded-xl p-5 shadow-lg shadow-blue-500/10 relative transform hover:scale-105 transition">
+              <div class="flex items-center gap-2 mb-2">
+                <span class="text-xl">💼</span>
+                <div class="font-bold text-sm text-blue-400">Finance Portal</div>
+              </div>
+              <div class="text-[11px] font-mono text-slate-400 mb-2">Port: <span class="text-white">3002 / 4000</span></div>
+              <div class="text-[11px] text-slate-300">Production system with real financial ledger & executive logins.</div>
+              <div class="mt-3 flex items-center gap-1.5 text-[10px] font-mono text-emerald-400">
+                <span class="w-2 h-2 rounded-full bg-emerald-400"></span> Legitimate Users Only
+              </div>
+            </div>
+
+            <!-- Node 2: Bridge Layer -->
+            <div class="bg-slate-900/90 border border-purple-500/60 rounded-xl p-5 shadow-lg shadow-purple-500/20 relative transform hover:scale-105 transition" style="box-shadow: 0 0 ${15 + pulse * 15}px rgba(168, 85, 247, 0.3);">
+              <div class="flex items-center gap-2 mb-2">
+                <span class="text-xl">🔀</span>
+                <div class="font-bold text-sm text-purple-400">Bridge Layer</div>
+              </div>
+              <div class="text-[11px] font-mono text-slate-400 mb-2">Port: <span class="text-white">3500</span></div>
+              <div class="text-[11px] text-slate-300">Monitors anomalies, tracks brute-force counts & executes silent redirects.</div>
+              <div class="mt-3 flex items-center gap-1.5 text-[10px] font-mono text-purple-300">
+                <span class="w-2 h-2 rounded-full bg-purple-400 animate-pulse"></span> 3-Attempt Trigger Active
+              </div>
+            </div>
+
+            <!-- Node 3: HoneyShield -->
+            <div class="bg-slate-900/90 border border-emerald-500/40 rounded-xl p-5 shadow-lg shadow-emerald-500/10 relative transform hover:scale-105 transition">
+              <div class="flex items-center gap-2 mb-2">
+                <span class="text-xl">🛡️</span>
+                <div class="font-bold text-sm text-emerald-400">HoneyShield Honeypot</div>
+              </div>
+              <div class="text-[11px] font-mono text-slate-400 mb-2">Port: <span class="text-white">5173 / 3001</span></div>
+              <div class="text-[11px] text-slate-300">High-interaction sandbox capturing attacker keystrokes & telemetry.</div>
+              <div class="mt-3 flex items-center gap-1.5 text-[10px] font-mono text-emerald-400">
+                <span class="w-2 h-2 rounded-full bg-emerald-400"></span> Deception Sandbox
+              </div>
+            </div>
+          </div>
+        </div>
+      `
+    }
+
+    // SCENE 2: REAL EMPLOYEE LOGIN
+    function renderScene2(container, tick) {
+      document.getElementById('siren-overlay').style.opacity = '0'
+      const showDashboard = tick > 25
+
+      if (!showDashboard) {
+        // Typing simulation on login page
+        const uname = 'j.smith'.substring(0, Math.min(7, Math.floor(tick / 2)))
+        const pass = '•••••••••••••'.substring(0, Math.min(13, Math.floor((tick - 10) / 1.5)))
+
+        container.innerHTML = `
+          <div class="w-full max-w-3xl bg-slate-900 border border-slate-700/80 rounded-xl overflow-hidden shadow-2xl">
+            <div class="bg-slate-800 px-4 py-2 flex items-center gap-2 border-b border-slate-700 text-xs font-mono text-slate-300">
+              <span class="w-3 h-3 rounded-full bg-red-500 inline-block"></span>
+              <span class="w-3 h-3 rounded-full bg-yellow-500 inline-block"></span>
+              <span class="w-3 h-3 rounded-full bg-green-500 inline-block"></span>
+              <span class="ml-2 text-slate-400">http://localhost:3002/login (AcmeCorp Financial)</span>
+            </div>
+            
+            <div class="p-8 grid grid-cols-2 gap-8 items-center">
+              <div>
+                <div class="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center text-xl mb-3">💼</div>
+                <h3 class="text-lg font-bold text-white">AcmeCorp Financial</h3>
+                <p class="text-xs text-slate-400 mt-1">Enterprise Employee Access System</p>
+                <div class="mt-4 space-y-1 text-[11px] text-slate-400">
+                  <div>✔ Bank-Grade Encryption</div>
+                  <div>✔ Executive Access Control</div>
+                </div>
+              </div>
+
+              <div class="bg-slate-950 p-5 rounded-lg border border-slate-800 space-y-3 text-xs">
+                <div class="font-bold text-slate-200">Employee Sign In</div>
+                <div>
+                  <label class="text-[10px] text-slate-400">Username</label>
+                  <div class="bg-slate-900 border border-blue-500/50 rounded px-2.5 py-1.5 font-mono text-white">${uname}<span class="animate-pulse">|</span></div>
+                </div>
+                <div>
+                  <label class="text-[10px] text-slate-400">Password</label>
+                  <div class="bg-slate-900 border border-slate-700 rounded px-2.5 py-1.5 font-mono text-white">${pass}</div>
+                </div>
+                <button class="w-full py-2 bg-blue-600 font-semibold text-white rounded mt-2">🔐 Sign In</button>
+              </div>
+            </div>
+          </div>
+        `
+      } else {
+        // Authenticated Real Dashboard View
+        container.innerHTML = `
+          <div class="w-full max-w-4xl bg-slate-900 border border-slate-700 rounded-xl overflow-hidden shadow-2xl">
+            <div class="bg-slate-800 px-4 py-2 flex items-center justify-between border-b border-slate-700 text-xs font-mono text-slate-300">
+              <span class="text-slate-400">http://localhost:3002/dashboard — AcmeCorp Financial</span>
+              <span class="text-emerald-400 font-bold">● AUTHENTICATED: John Smith (CEO)</span>
+            </div>
+
+            <div class="p-6">
+              <div class="flex justify-between items-center mb-4">
+                <div>
+                  <h3 class="text-lg font-bold text-white">Welcome back, John Smith</h3>
+                  <p class="text-xs text-slate-400">Executive Clearance Granted · Q3 Financial Intelligence</p>
+                </div>
+                <span class="px-2.5 py-1 rounded bg-emerald-500/20 text-emerald-400 text-xs font-mono font-semibold border border-emerald-500/30">
+                  REAL PORTAL
+                </span>
+              </div>
+
+              <div class="grid grid-cols-3 gap-3 mb-4">
+                <div class="bg-slate-950 p-3 rounded-lg border border-slate-800">
+                  <div class="text-[10px] text-slate-400 uppercase">Total Revenue</div>
+                  <div class="text-lg font-bold text-emerald-400 font-mono">$4,823,450</div>
+                </div>
+                <div class="bg-slate-950 p-3 rounded-lg border border-slate-800">
+                  <div class="text-[10px] text-slate-400 uppercase">Active Clients</div>
+                  <div class="text-lg font-bold text-blue-400 font-mono">147 Accounts</div>
+                </div>
+                <div class="bg-slate-950 p-3 rounded-lg border border-slate-800">
+                  <div class="text-[10px] text-slate-400 uppercase">Monthly Growth</div>
+                  <div class="text-lg font-bold text-purple-400 font-mono">+12.4%</div>
+                </div>
+              </div>
+
+              <div class="bg-slate-950 rounded-lg p-3 border border-slate-800 text-xs">
+                <div class="font-semibold text-slate-300 mb-2">Confidential Financial Reports (6)</div>
+                <div class="space-y-1.5 font-mono text-[11px] text-slate-400">
+                  <div class="flex justify-between border-b border-slate-800/60 pb-1"><span>📁 RPT-001 Q3 2024 Financial Report</span><span class="text-emerald-400">FINAL · 2.4 MB</span></div>
+                  <div class="flex justify-between border-b border-slate-800/60 pb-1"><span>📁 RPT-002 Annual Budget Forecast 2025</span><span class="text-yellow-400">DRAFT · 5.1 MB</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        `
+      }
+    }
+
+    // SCENE 3: BRUTE FORCE ATTEMPTS
+    function renderScene3(container, tick) {
+      document.getElementById('siren-overlay').style.opacity = '0'
+      const attemptNum = tick < 15 ? 1 : 2
+      const warningText = attemptNum === 2 ? "⚠️ Multiple failed attempts detected (1 attempt remaining)" : "Invalid credentials"
+
+      container.innerHTML = `
+        <div class="w-full max-w-4xl grid grid-cols-1 md:grid-cols-2 gap-6 items-center">
+          
+          <!-- Attacker Browser -->
+          <div class="bg-slate-900 border border-red-500/50 rounded-xl overflow-hidden shadow-2xl">
+            <div class="bg-red-950/60 px-4 py-2 border-b border-red-500/30 flex justify-between text-xs font-mono text-red-300">
+              <span>ATTACKER BROWSER (PORT 3002)</span>
+              <span class="text-red-400 font-bold">Attempt #${attemptNum}</span>
+            </div>
+            
+            <div class="p-5 space-y-3 text-xs">
+              <div>
+                <label class="text-[10px] text-slate-400">Target Username</label>
+                <input class="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 font-mono text-slate-200" value="j.smith" readonly>
+              </div>
+              <div>
+                <label class="text-[10px] text-slate-400">Brute-force Guess</label>
+                <input class="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 font-mono text-red-400" value="${attemptNum === 1 ? 'password123' : 'smith2024'}" readonly>
+              </div>
+
+              <div class="p-2 bg-red-500/10 border border-red-500/30 text-red-400 rounded text-[11px]">
+                ${warningText}
+              </div>
+            </div>
+          </div>
+
+          <!-- Bridge Telemetry Stream -->
+          <div class="bg-slate-950 border border-purple-500/40 rounded-xl p-5 shadow-2xl font-mono text-xs">
+            <div class="flex justify-between items-center mb-3 pb-2 border-b border-slate-800">
+              <span class="text-purple-400 font-bold">🔀 Bridge Telemetry (Port 3500)</span>
+              <span class="text-yellow-400 text-[10px] font-semibold">TRACKING IP</span>
+            </div>
+
+            <div class="space-y-2 text-[11px]">
+              <div class="text-slate-400">Source IP: <span class="text-slate-200">198.51.100.77 (Frankfurt, DE)</span></div>
+              <div class="text-slate-400">Target User: <span class="text-slate-200">j.smith</span></div>
+              <div class="text-slate-400">Failure Count: <span class="text-yellow-400 font-bold text-sm">${attemptNum} / 3 Threshold</span></div>
+              <div class="text-slate-400">Action: <span class="text-blue-400 font-semibold">ALLOW (Monitoring window active)</span></div>
+            </div>
+
+            <div class="mt-4 pt-3 border-t border-slate-800 text-[10px] text-slate-500">
+              Next failed attempt triggers automatic silent redirection to HoneyShield sandbox.
+            </div>
+          </div>
+        </div>
+      `
+    }
+
+    // SCENE 4: SILENT REDIRECT TRIGGER
+    function renderScene4(container, tick) {
+      const isRedirecting = tick > 10
+
+      if (tick > 12) {
+        playSirenSound()
+        document.getElementById('siren-overlay').style.animation = 'siren-flash 0.8s infinite'
+        document.getElementById('siren-overlay').style.opacity = '1'
+      }
+
+      container.innerHTML = `
+        <div class="w-full max-w-3xl bg-slate-900 border ${isRedirecting ? 'border-red-500 shadow-red-500/30' : 'border-purple-500'} rounded-xl p-6 shadow-2xl text-center relative overflow-hidden transition-all duration-500">
+          
+          <div class="mb-4">
+            <span class="px-3 py-1 rounded-full text-xs font-mono font-bold ${isRedirecting ? 'bg-red-500/20 text-red-400 border border-red-500/30' : 'bg-purple-500/20 text-purple-400'}">
+              ${isRedirecting ? '🚨 THRESHOLD EXCEEDED (ATTEMPT #3)' : 'ATTEMPT #3 IN PROGRESS'}
+            </span>
+          </div>
+
+          <h2 class="text-xl md:text-2xl font-extrabold text-white mb-2">
+            ${isRedirecting ? 'Silent Honeypot Redirection Triggered' : 'Bridge Intercepting Brute-Force Spike'}
+          </h2>
+
+          <p class="text-xs text-slate-300 max-w-lg mx-auto mb-6">
+            ${isRedirecting ? 'The Finance Portal frontend displays an authentic spinner while silently routing the browser to HoneyShield (Port 5173).' : 'Evaluating IP risk score against 5-minute sliding window memory store.'}
+          </p>
+
+          <!-- Spinner Simulation -->
+          <div class="bg-slate-950 p-6 rounded-xl border border-slate-800 max-w-md mx-auto space-y-4">
+            <div class="w-10 h-10 border-4 border-slate-700 border-t-blue-500 rounded-full animate-spin mx-auto"></div>
+            <div class="text-xs font-mono text-slate-300">Authenticating... please wait</div>
+            <div class="text-[10px] font-mono text-purple-400 bg-purple-500/10 py-1 px-2 rounded border border-purple-500/20">
+              ➔ Redirect: http://localhost:5173?user=j.smith&ref=portal
+            </div>
+          </div>
+        </div>
+      `
+    }
+
+    // SCENE 5: HONEYPOT SANDBOX TRAP
+    function renderScene5(container, tick) {
+      document.getElementById('siren-overlay').style.opacity = '0'
+
+      container.innerHTML = `
+        <div class="w-full max-w-4xl bg-slate-900 border border-emerald-500/40 rounded-xl overflow-hidden shadow-2xl">
+          <div class="bg-slate-800 px-4 py-2 flex items-center justify-between border-b border-slate-700 text-xs font-mono">
+            <span class="text-slate-300">http://localhost:5173/dashboard (Honeypot Sandbox)</span>
+            <span class="text-red-400 font-bold bg-red-500/10 px-2 py-0.5 rounded border border-red-500/20">TRAP ACTIVE: SESSION TRAP-j.smith-1094</span>
+          </div>
+
+          <div class="p-6">
+            <div class="flex justify-between items-center mb-4">
+              <div>
+                <h3 class="text-lg font-bold text-white">AcmeCorp Employee Portal (Deception Layer)</h3>
+                <p class="text-xs text-slate-400">Attacker believes they successfully bypassed security</p>
+              </div>
+              <span class="px-2.5 py-1 rounded bg-yellow-500/20 text-yellow-400 text-xs font-mono font-semibold">
+                🍯 BAIT ASSETS DEPLOYED
+              </span>
+            </div>
+
+            <!-- Honey Files & Decoy Tables -->
+            <div class="grid grid-cols-2 gap-4 text-xs font-mono">
+              <div class="bg-slate-950 p-3 rounded-lg border border-slate-800">
+                <div class="font-bold text-slate-300 mb-2">Canary Files & Database Exploits</div>
+                <div class="space-y-1 text-[11px] text-slate-400">
+                  <div class="text-red-400">📄 payroll_2025.xlsx (Canary token attached)</div>
+                  <div class="text-yellow-400">📄 backup_encryption_keys.txt (Decoy AES)</div>
+                  <div class="text-blue-400">📁 /api/database/query (SQLi Trap)</div>
+                </div>
+              </div>
+
+              <div class="bg-slate-950 p-3 rounded-lg border border-slate-800">
+                <div class="font-bold text-slate-300 mb-2">Attacker Telemetry Harvest</div>
+                <div class="space-y-1 text-[11px] text-slate-400">
+                  <div>IP: <span class="text-white">198.51.100.77</span></div>
+                  <div>Device: <span class="text-white">Win32 · Chrome · Canvas FP #a89f</span></div>
+                  <div>Risk Score: <span class="text-red-400 font-bold">98 / 100 (CRITICAL)</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      `
+    }
+
+    // SCENE 6: UNIFIED SOC BRIDGE MONITOR
+    function renderScene6(container, tick) {
+      document.getElementById('siren-overlay').style.opacity = '0'
+
+      container.innerHTML = `
+        <div class="w-full max-w-4xl bg-slate-900 border border-slate-700 rounded-xl p-6 shadow-2xl">
+          <div class="flex justify-between items-center mb-4 pb-3 border-b border-slate-800">
+            <div>
+              <h2 class="text-lg font-bold text-white flex items-center gap-2">
+                <span>🔀</span> HoneyShield SOC Bridge Monitor
+              </h2>
+              <p class="text-xs text-slate-400">Unified command center overseeing Finance Portal & Deception Grid</p>
+            </div>
+            <div class="flex items-center gap-2">
+              <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
+              <span class="text-xs font-mono text-emerald-400 font-semibold">Bridge Connected (Port 3500)</span>
+            </div>
+          </div>
+
+          <!-- 4 Stat Cards -->
+          <div class="grid grid-cols-4 gap-3 mb-4 font-mono">
+            <div class="bg-slate-950 p-3 rounded-lg border border-slate-800">
+              <div class="text-[10px] text-slate-400 uppercase">Active Tracking</div>
+              <div class="text-lg font-bold text-blue-400">1 Session</div>
+            </div>
+            <div class="bg-slate-950 p-3 rounded-lg border border-slate-800">
+              <div class="text-[10px] text-slate-400 uppercase">Total Failures</div>
+              <div class="text-lg font-bold text-yellow-400">3 Attempts</div>
+            </div>
+            <div class="bg-slate-950 p-3 rounded-lg border border-slate-800">
+              <div class="text-[10px] text-slate-400 uppercase">Redirected</div>
+              <div class="text-lg font-bold text-purple-400">1 Trapped</div>
+            </div>
+            <div class="bg-slate-950 p-3 rounded-lg border border-slate-800">
+              <div class="text-[10px] text-slate-400 uppercase">Auto-Blocked</div>
+              <div class="text-lg font-bold text-red-400">1 IP</div>
+            </div>
+          </div>
+
+          <!-- Live Event Feed -->
+          <div class="bg-slate-950 rounded-lg p-3 border border-slate-800 font-mono text-xs">
+            <div class="text-slate-400 font-bold mb-2 flex justify-between">
+              <span>Live Cross-System Event Stream</span>
+              <span class="text-[10px] text-slate-500">Real-Time WebSockets</span>
+            </div>
+            <div class="space-y-2 text-[11px]">
+              <div class="p-2 bg-red-500/10 border border-red-500/30 rounded flex justify-between items-center text-red-400">
+                <span>🔀 ATTACKER_REDIRECTED: 198.51.100.77 → j.smith (Threshold Exceeded)</span>
+                <span class="text-[10px] text-slate-400">Just now</span>
+              </div>
+              <div class="p-2 bg-yellow-500/10 border border-yellow-500/30 rounded flex justify-between items-center text-yellow-400">
+                <span>⚠️ SUSPICIOUS_ACTIVITY: 2 failed attempts on user 'j.smith'</span>
+                <span class="text-[10px] text-slate-400">12s ago</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      `
+    }
+
+    // Start video on load
+    window.addEventListener('DOMContentLoaded', () => {
+      updatePlayer(0)
+      requestAnimationFrame(tick)
+    })
+  </script>
+</body>
+</html>

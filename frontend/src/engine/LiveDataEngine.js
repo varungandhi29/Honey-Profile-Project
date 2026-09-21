@@ -105,7 +105,10 @@ class LiveDataEngine {
         }
       }
 
-      const honeyRes = await fetch(`${backendUrl}/api/export/honey`, { headers: { 'Accept': 'application/json' } })
+      const token = sessionStorage.getItem('adminToken')
+      const authHeaders = token ? { 'Authorization': `Bearer ${token}` } : {}
+
+      const honeyRes = await fetch(`${backendUrl}/api/export/honey`, { headers: { 'Accept': 'application/json', ...authHeaders } })
       if (honeyRes.ok) {
         const hLogs = await honeyRes.json()
         if (Array.isArray(hLogs) && hLogs.length > 0) {
@@ -113,7 +116,7 @@ class LiveDataEngine {
         }
       }
 
-      const alertsRes = await fetch(`${backendUrl}/api/alerts`)
+      const alertsRes = await fetch(`${backendUrl}/api/alerts`, { headers: authHeaders })
       if (alertsRes.ok) {
         const alerts = await alertsRes.json()
         if (Array.isArray(alerts) && alerts.length > 0) {
@@ -125,7 +128,7 @@ class LiveDataEngine {
         }
       }
 
-      const blockRes = await fetch(`${backendUrl}/api/blocklist`)
+      const blockRes = await fetch(`${backendUrl}/api/blocklist`, { headers: authHeaders })
       if (blockRes.ok) {
         const blocked = await blockRes.json()
         if (Array.isArray(blocked) && blocked.length > 0) {

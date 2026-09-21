@@ -6,35 +6,61 @@ import HoneyLog from '../models/HoneyLog.js'
 import Alert from '../models/Alert.js'
 import logger from '../middleware/logger.js'
 
-const ENCRYPTION_KEY = process.env.VAULT_ENCRYPTION_KEY ||
-  crypto.randomBytes(32).toString('hex')
-const ALGORITHM = 'aes-256-gcm'
+const ENCRYPTION_KEY = process.env.VAULT_ENCRYPTION_KEY
 
-export const encrypt = (text) => {
-  const iv = crypto.randomBytes(16)
-  const cipher = crypto.createCipheriv(
-    ALGORITHM,
-    Buffer.from(ENCRYPTION_KEY.slice(0, 32)),
-    iv
-  )
-  let encrypted = cipher.update(text, 'utf8', 'hex')
-  encrypted += cipher.final('hex')
-  const authTag = cipher.getAuthTag()
-  return `${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted}`
+if (!ENCRYPTION_KEY || !/^[0-9a-fA-F]{64}$/.test(ENCRYPTION_KEY)) {
+  logger.error('[FATAL] VAULT_ENCRYPTION_KEY must be exactly 64 hex characters (32 bytes). Refusing to start.')
+  process.exit(1)
 }
 
-export const decrypt = (encryptedText) => {
-  const [ivHex, authTagHex, encrypted] = encryptedText.split(':')
+const KEY_BUFFER = Buffer.from(ENCRYPTION_KEY, 'hex')
+const ALGORITHM = 'aes-256-gcm'
+
+/**
+ * Encrypt plaintext using AES-256-GCM.
+ * Generates a fresh 12-byte (96-bit) IV for each call.
+ * Returns: iv:authTag:ciphertext (all hex-encoded, colon-separated).
+ */
+export const encrypt = (text) => {
+  if (text === null || text === undefined) return null
+  const iv = crypto.randomBytes(12)
+  const cipher = crypto.createCipheriv(ALGORITHM, KEY_BUFFER, iv)
+  let ciphertext = cipher.update(String(text), 'utf8', 'hex')
+  ciphertext += cipher.final('hex')
+  const authTag = cipher.getAuthTag().toString('hex')
+  return `${iv.toString('hex')}:${authTag}:${ciphertext}`
+}
+
+/**
+ * Decrypt stored credential using AES-256-GCM.
+ * Detects legacy plaintext vs iv:authTag:ciphertext.
+ * Verifies auth tag and throws loudly on tampering.
+ */
+export const decrypt = (storedValue) => {
+  if (storedValue === null || storedValue === undefined) return null
+  if (typeof storedValue !== 'string') return storedValue
+
+  const parts = storedValue.split(':')
+  // Check if string matches 3-part hex format: iv (24 hex), authTag (32 hex), ciphertext (hex)
+  const isEncryptedFormat = parts.length === 3 &&
+    parts[0].length === 24 &&
+    /^[0-9a-fA-F]{24}$/.test(parts[0]) &&
+    parts[1].length === 32 &&
+    /^[0-9a-fA-F]{32}$/.test(parts[1]) &&
+    /^[0-9a-fA-F]*$/.test(parts[2])
+
+  if (!isEncryptedFormat) {
+    // Legacy plaintext data — return as-is
+    return storedValue
+  }
+
+  const [ivHex, authTagHex, ciphertextHex] = parts
   const iv = Buffer.from(ivHex, 'hex')
   const authTag = Buffer.from(authTagHex, 'hex')
-  const decipher = crypto.createDecipheriv(
-    ALGORITHM,
-    Buffer.from(ENCRYPTION_KEY.slice(0, 32)),
-    iv
-  )
+  const decipher = crypto.createDecipheriv(ALGORITHM, KEY_BUFFER, iv)
   decipher.setAuthTag(authTag)
-  let decrypted = decipher.update(encrypted, 'hex', 'utf8')
-  decrypted += decipher.final('utf8')
+  let decrypted = decipher.update(ciphertextHex, 'hex', 'utf8')
+  decrypted += decipher.final('utf8') // Throws if authTag verification fails
   return decrypted
 }
 
@@ -84,6 +110,7 @@ export const getSecureVaultData = async (adminOnly = true) => {
         attackerIP: h.attackerIP,
         action: h.action,
         fakeTarget: h.fakeTarget,
+        fakeCredential: h.fakeCredential ? decrypt(h.fakeCredential) : null,
         timestamp: h.timestamp,
         deepTrap: h.deepTrap,
       })),

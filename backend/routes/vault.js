@@ -4,7 +4,7 @@ import Session from '../models/Session.js'
 import Attack from '../models/Attack.js'
 import HoneyLog from '../models/HoneyLog.js'
 import Alert from '../models/Alert.js'
-import { getSecureVaultData } from '../services/dataVaultService.js'
+import { getSecureVaultData, decrypt } from '../services/dataVaultService.js'
 
 const router = express.Router()
 
@@ -65,6 +65,7 @@ export const getSessionEvidence = async (sessionId) => {
     honeyLogs: (honeyLogs || []).map(h => ({
       action: h.action,
       fakeTarget: h.fakeTarget,
+      fakeCredential: h.fakeCredential ? decrypt(h.fakeCredential) : null,
       responseSimulated: h.responseSimulated,
       deepTrap: h.deepTrap,
       timestamp: h.timestamp,

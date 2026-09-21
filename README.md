@@ -60,6 +60,46 @@ Instead of traditional passive defenses, HoneyShield deploys high-interaction de
 * **Hardware & Browser Fingerprint Blocking**: Blocks adversaries even if they rotate IP addresses, using canvas, WebGL, audio, and device fingerprint hashes.
 * **Live Session Termination**: SOC operators can quarantine or disconnect hostile sessions in real-time with one click.
 
+## 🔀 Dual System Honeypot Architecture (Option 2)
+
+HoneyShield V2 supports a fully decoupled **Dual System Architecture** where legitimate production systems run alongside deception environments, connected via an intelligent **Bridge Layer**:
+
+```
+ ┌──────────────────────────────────────┐       ┌──────────────────────────────────────┐
+ │  System 1: AcmeCorp Finance Portal   │       │     System 2: HoneyShield Honeypot   │
+ │  Frontend: React (Port 3002)         │       │     Frontend: React (Port 5173)      │
+ │  Backend: Node.js (Port 4000)        │       │     Backend: Node.js (Port 3001)     │
+ │  Database: MongoDB (financeportal)   │       │     Database: MongoDB (honeyshield)  │
+ └──────────────────┬───────────────────┘       └──────────────────▲───────────────────┘
+                    │                                              │
+                    │ 1-2 Failed Logins (Telemetry)                │ Silent Redirect (3+ Failures)
+                    ▼                                              │ & Unified SOC Events
+        ┌──────────────────────────────────────────────────────────┴───────────────────┐
+        │                         Bridge Layer Service (Port 3500)                     │
+        │  - Monitors failed attempts per IP and username                              │
+        │  - Triggers SILENT REDIRECT to HoneyShield after 3 failed attempts           │
+        │  - Permanently auto-blocks and syncs blocklist after 5 brute-force attempts  │
+        │  - Streams real-time intercept telemetry to HoneyShield Admin Bridge Monitor │
+        └──────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Attack & Deception Flow
+1. **Legitimate Employee Login**:
+   - Employee visits `http://localhost:3002` (Finance Portal) and logs in with valid credentials (e.g. `j.smith` / `JSmith$ecure99!`).
+   - Bridge Layer records 0 failures; employee accesses real financial dashboards, reports, invoices, and client lists with zero honeypot involvement.
+2. **Attacker Brute-Force Interception**:
+   - Attacker attempts wrong credentials on `http://localhost:3002`.
+   - Attempts 1 & 2: Finance Portal reports failures to Bridge Layer; attacker receives credential warning.
+   - Attempt 3: Bridge Layer flags the IP as `REDIRECT_TO_HONEYPOT`.
+   - Finance Portal responds with silent redirect instruction; frontend displays brief "Authenticating..." spinner and seamlessly routes attacker to `http://localhost:5173?user=j.smith&ref=portal`.
+3. **Attacker Trapped in HoneyShield**:
+   - Attacker lands on an identical-looking fake login portal with username pre-filled.
+   - Any credentials entered trap the attacker inside the HoneyShield sandbox deception environment.
+   - HoneyShield triggers continuous siren audio alerts (`playPoliceSiren`) and streams real-time telemetry to the SOC dashboard.
+4. **Unified SOC Command Center**:
+   - Admin monitors all cross-system intercepts, failed attempts, and attacker redirections in the **Bridge Monitor** page.
+   - Auto-blocks and manual blocks immediately synchronize across both systems.
+
 ---
 
 ## 🏗️ System Architecture

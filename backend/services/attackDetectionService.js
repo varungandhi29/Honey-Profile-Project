@@ -74,7 +74,7 @@ export const detectAttackVector = async (req, loginData) => {
   }
 
   // VECTOR 4 — VPN/PROXY/TOR DETECTION
-  const reputation = checkIPReputation(ip)
+  const reputation = await checkIPReputation(ip)
   if (reputation.suspicious) {
     detectedVectors.push(`VPN_DETECTED:${reputation.label}`)
     riskScore += reputation.riskBonus || 30

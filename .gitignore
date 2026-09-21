@@ -18,3 +18,5 @@ build/
 Thumbs.db
 .vscode/
 scratch/
+*.admin-password-once.txt
+backend/.admin-password-once.txt

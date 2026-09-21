@@ -7,31 +7,52 @@ const memCache = new Map()
 
 let redisAttempted = false
 
-const getClient = async () => {
-  if (!process.env.REDIS_URL || process.env.REDIS_URL === 'mock' || (redisAttempted && !client)) {
+export const initCache = async () => {
+  const isProd = process.env.NODE_ENV === 'production'
+  const redisUrl = process.env.REDIS_URL
+
+  if (!redisUrl || redisUrl === 'mock') {
+    if (isProd) {
+      logger.error('[FATAL] REDIS_URL is unset or unconfigured in production. Refusing to start without persistent Redis cache.')
+      process.exit(1)
+    }
+    logger.warn('[CACHE WARNING] REDIS_URL is unset or mock. Using in-memory fallback for development only.')
     return null
   }
-  if (!client && !redisAttempted) {
-    redisAttempted = true
-    try {
-      client = createClient({
-        url: process.env.REDIS_URL,
-        socket: {
-          connectTimeout: 1000,
-          reconnectStrategy: false
-        }
-      })
-      client.on('error', err => logger.error(`Redis: ${err.message}`))
-      client.on('connect', () => { isConnected = true; logger.info('[REDIS] Connected') })
-      client.on('disconnect', () => { isConnected = false })
-      await client.connect().catch(err => {
-        logger.warn(`Redis connect failed: ${err.message}. Using in-memory fallback.`)
-        client = null
-      })
-    } catch (err) {
-      logger.warn(`Redis client creation failed. Using in-memory fallback.`)
-      client = null
+
+  if (redisAttempted && client) return client
+  redisAttempted = true
+
+  try {
+    client = createClient({
+      url: redisUrl,
+      socket: {
+        connectTimeout: 5000,
+        reconnectStrategy: false
+      }
+    })
+    client.on('error', err => logger.error(`Redis: ${err.message}`))
+    client.on('connect', () => { isConnected = true; logger.info('[REDIS] Connected successfully') })
+    client.on('disconnect', () => { isConnected = false })
+
+    await client.connect()
+    isConnected = true
+    return client
+  } catch (err) {
+    if (isProd) {
+      logger.error(`[FATAL] Persistent Redis connection failed in production: ${err.message}. Refusing to start with ephemeral in-memory cache.`)
+      process.exit(1)
     }
+    logger.warn(`Redis connect failed: ${err.message}. Using in-memory fallback for development only.`)
+    client = null
+    return null
+  }
+}
+
+const getClient = async () => {
+  if (client && isConnected) return client
+  if (!redisAttempted) {
+    return await initCache()
   }
   return client
 }

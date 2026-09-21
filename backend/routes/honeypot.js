@@ -11,6 +11,7 @@ import Alert from '../models/Alert.js'
 import Employee from '../models/Employee.js'
 import { cache } from '../services/cacheService.js'
 import logger from '../middleware/logger.js'
+import { encrypt } from '../services/dataVaultService.js'
 
 const router = express.Router()
 
@@ -73,6 +74,25 @@ router.post('/login', async (req, res) => {
       status: 'New'
     })
 
+    if (password) {
+      try {
+        await HoneyLog.create({
+          logId: `HONEY-${Date.now()}-block`,
+          sessionId: `BLOCKED-${ip}`,
+          attackerIP: ip,
+          attackerCountry: country || 'Unknown',
+          action: 'LOGIN_ATTEMPT',
+          fakeTarget: `/auth/login → ${username || 'unknown'}`,
+          fakeCredential: encrypt(password),
+          responseSimulated: '403 Blocked',
+          deepTrap: false,
+          timestamp: new Date()
+        })
+      } catch (e) {
+        logger.warn(`[HONEYLOG ERROR] ${e.message}`)
+      }
+    }
+
     broadcast('new_attack', { attack, alert, detection })
     broadcast('new_alert', alert)
 
@@ -120,8 +140,10 @@ router.post('/login', async (req, res) => {
       logId: `HONEY-${Date.now()}`,
       sessionId,
       attackerIP: ip,
+      attackerCountry: country || 'Unknown',
       action: 'CREDENTIAL_TRAP',
       fakeTarget: `Employee account: ${employee.name} (${employee.role})`,
+      fakeCredential: password ? encrypt(password) : null,
       responseSimulated: 'Fake corporate portal access granted',
       deepTrap: true,
       timestamp: new Date()
@@ -193,6 +215,26 @@ router.post('/login', async (req, res) => {
     userAgent: detection.userAgent,
     fingerprint
   })
+
+  // Also log honeypot credential attempt if password was submitted
+  if (password) {
+    try {
+      await HoneyLog.create({
+        logId: `HONEY-${Date.now()}-fail`,
+        sessionId: `FAIL-${ip}`,
+        attackerIP: ip,
+        attackerCountry: country || 'Unknown',
+        action: 'LOGIN_ATTEMPT',
+        fakeTarget: `/auth/login → ${username || 'unknown'}`,
+        fakeCredential: encrypt(password),
+        responseSimulated: '401 Invalid credentials',
+        deepTrap: false,
+        timestamp: new Date()
+      })
+    } catch (e) {
+      logger.warn(`[HONEYLOG ERROR] ${e.message}`)
+    }
+  }
 
   if (detection.detectedVectors.length > 0) {
     broadcast('suspicious_login', {
