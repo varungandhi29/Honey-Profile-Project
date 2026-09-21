@@ -282,19 +282,6 @@ export default function App() {
     onEmployeesRegenerated: (data) => {
       console.log('[Socket] Employees regenerated:', data)
       addToast(`🔄 Regenerated ${data.count} decoy employee accounts`, 'info')
-    },
-    onBridgeEvent: (data) => {
-      const icon = data.type === 'ATTACKER_REDIRECTED' ? '🔀' : data.type === 'SUSPICIOUS_ACTIVITY' ? '⚠️' : '📝'
-      const severity = data.type === 'ATTACKER_REDIRECTED' ? 'critical' : data.type === 'SUSPICIOUS_ACTIVITY' ? 'warning' : 'info'
-      addToast(`${icon} [Finance Portal] ${data.message || data.type}: ${data.ip}`, severity)
-      if (data.attemptNumber >= 4) alertEngine.playHigh()
-    },
-    onAttackerRedirected: (data) => {
-      console.log('[Bridge] Attacker redirected:', data)
-      alertEngine.startContinuousAlert('CRITICAL', 8000)
-      alertEngine.playPoliceSiren(5)
-      setForceUpdate(p => p + 1)
-      addToast(`🔀 REDIRECTED: Attacker from Finance Portal now in HoneyShield — ${data.ip}`, 'critical')
     }
   })
 

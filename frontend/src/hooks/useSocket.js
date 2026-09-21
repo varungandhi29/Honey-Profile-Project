@@ -43,9 +43,7 @@ export const useSocket = ({
     onHoneyTrap,
     onSuspiciousLogin,
     onAttackerAutoBlocked,
-    onEmployeesRegenerated,
-    onBridgeEvent,
-    onAttackerRedirected
+    onEmployeesRegenerated
   })
 
   useEffect(() => {
@@ -66,9 +64,7 @@ export const useSocket = ({
       onHoneyTrap,
       onSuspiciousLogin,
       onAttackerAutoBlocked,
-      onEmployeesRegenerated,
-      onBridgeEvent,
-      onAttackerRedirected
+      onEmployeesRegenerated
     }
   })
 
