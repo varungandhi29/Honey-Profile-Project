@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { LogOut, Folder, Users, Server, FileText, Settings, Download, Search, AlertCircle, Activity, Database } from 'lucide-react';
+import { LogOut, Folder, Users, Server, FileText, Settings, Download, Search, AlertCircle, Activity, Database, Terminal, ShieldAlert } from 'lucide-react';
 import { DECEPTION_NAV, FAKE_FILES, FAKE_EMPLOYEES, FAKE_SERVERS, FAKE_REPORTS, LOG_CONTENT } from '../engine/constants';
 import BlockedScreen from '../components/BlockedScreen';
 
@@ -92,6 +92,238 @@ const FakeDashboard = ({ triggerAttack, addToast }) => {
     </div>
   )
 }
+
+const FakeExploitConsole = ({ triggerAttack, addToast }) => {
+  const [history, setHistory] = useState([
+    { type: 'system', text: 'HoneyShield Adversary Framework v4.2.1 initialized.' },
+    { type: 'system', text: 'Target network subnet [192.168.1.0/24] discovered.' },
+    { type: 'system', text: 'Type "help" for a list of available exploitation modules.' }
+  ]);
+  const [cmd, setCmd] = useState('');
+  const bottomRef = useRef(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [history]);
+
+  const runCommand = (commandStr) => {
+    const raw = (commandStr || cmd).trim();
+    if (!raw) return;
+
+    const newHistory = [...history, { type: 'input', text: `root@adversary:~# ${raw}` }];
+    const lower = raw.toLowerCase();
+
+    if (lower === 'clear') {
+      setHistory([]);
+      setCmd('');
+      return;
+    }
+
+    if (lower === 'help' || lower === '?') {
+      newHistory.push({
+        type: 'output',
+        text: `AVAILABLE EXPLOIT MODULES:
+  nmap -sV target           Probe open network services & internal firewalls (Recon)
+  sqlmap -u /api/users      Inject UNION-based SQL payloads & dump user tables
+  hydra -l admin            Brute-force credential stuffing on corporate gateway
+  cat /etc/shadow           Read sensitive hashed credentials via path traversal
+  rce --exec "id"           Execute arbitrary command injection on server shell
+  exfil --payroll           Exfiltrate employee salaries & corporate financial DB
+  whoami                    Display target access permissions and threat index
+  clear                     Clear interactive terminal screen`
+      });
+      triggerAttack('RECONNAISSANCE');
+    } else if (lower.includes('nmap') || lower.includes('scan')) {
+      newHistory.push({
+        type: 'output',
+        text: `Starting Nmap 7.94 scan on internal subnet (192.168.1.0/24)...
+[+] Port 22/tcp   OPEN  OpenSSH 8.4p1 (Debian 10)
+[+] Port 80/tcp   OPEN  Apache/2.4.52 (HoneyShield Proxy Layer)
+[+] Port 443/tcp  OPEN  OpenSSL 1.1.1n (TLS Active)
+[+] Port 5432/tcp OPEN  PostgreSQL 14.2 (Credentials DB)
+[+] Port 8080/tcp OPEN  Admin Management SOC Portal
+Host state: 1 vulnerable host detected. 3 honeypots identified.`
+      });
+      triggerAttack('RECONNAISSANCE');
+      addToast('Network port sweep completed — Target mapped', 'info');
+    } else if (lower.includes('sqlmap') || lower.includes('union') || lower.includes('select')) {
+      newHistory.push({
+        type: 'output',
+        text: `[!] Testing parameter 'id' for SQL injection vulnerabilities...
+[+] Parameter 'id' is vulnerable to Boolean-based blind and UNION query injection!
+[+] Database: 'corporate_prod_db' | Backend: PostgreSQL 14.2
+[+] Dumped 15 records from table 'users':
+    id: 1  | admin      | $2b$10$8eMGH1284rO200ex4KvTJeGqS1iQol6CoYzkI2X3zSPsBRVKRoFIi
+    id: 2  | jsmith     | $2b$10$9sA2mD7f...[decoy]
+    id: 3  | sconnor    | $2b$10$2lK8jF5h...[decoy]
+[!] Deception trigger recorded: Database honeypot activated.`
+      });
+      triggerAttack('SQL_INJECTION');
+      addToast('SQL injection payload executed — Database leaked', 'warning');
+    } else if (lower.includes('hydra') || lower.includes('brute')) {
+      newHistory.push({
+        type: 'output',
+        text: `[!] Hydra v9.2 launched against target auth gateway...
+[ATTEMPT 1/50] user: admin pass: 123456 -> 401 Unauthorized
+[ATTEMPT 2/50] user: admin pass: password -> 401 Unauthorized
+[ATTEMPT 3/50] user: admin pass: admin2026 -> 401 Unauthorized
+[+] Target rate-limiting detected! Deception honeypot trap tripped.`
+      });
+      triggerAttack('BRUTE_FORCE');
+      addToast('Brute-force attack detected by SOC', 'warning');
+    } else if (lower.includes('cat') || lower.includes('traversal') || lower.includes('/etc/')) {
+      newHistory.push({
+        type: 'output',
+        text: `root:x:0:0:root:/root:/bin/bash
+daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin
+bin:x:2:2:bin:/bin:/usr/sbin/nologin
+sys:x:3:3:sys:/dev:/usr/sbin/nologin
+varun:$6$rounds=50000$salt$kO8xP...:19240:0:99999:7:::
+darshan:$6$rounds=50000$salt$3mHq...:19240:0:99999:7:::
+dhruv:$6$rounds=50000$salt$1nBx...:19240:0:99999:7:::
+rudra:$6$rounds=50000$salt$9kLz...:19240:0:99999:7:::`
+      });
+      triggerAttack('DIRECTORY_TRAVERSAL');
+      addToast('Sensitive system file traversed', 'warning');
+    } else if (lower.includes('rce') || lower.includes('exec') || lower.includes('rm ') || lower.includes('sh') || lower.includes('bash')) {
+      newHistory.push({
+        type: 'output',
+        text: `[+] Executing remote shell instruction: ${raw}
+uid=0(root) gid=0(root) groups=0(root)
+Linux ip-10-0-4-12 5.10.0-18-amd64 #1 SMP Debian 5.10.140-1
+[!] Command injection signature intercepted by HoneyShield sandbox kernel.`
+      });
+      triggerAttack('COMMAND_INJECTION');
+      addToast('Remote command executed in sandbox', 'critical');
+    } else if (lower.includes('exfil') || lower.includes('payroll') || lower.includes('download')) {
+      newHistory.push({
+        type: 'output',
+        text: `[+] Establishing encrypted outbound C2 tunnel to adversary server...
+[+] Compressing 'payroll_2025.xlsx' (2.4 MB)
+[+] Compressing 'financial_records_Q4.xlsx' (1.8 MB)
+[!] Transfer in progress: 100% complete. 4.2 MB transmitted.
+[!] HONEY TOKEN TRIPPED: Decoy watermark telemetry beacon activated.`
+      });
+      triggerAttack('DATA_EXFILTRATION');
+      triggerAttack('HONEY_INTERACTION');
+      addToast('Data exfiltration completed — Decoy beacon active', 'critical');
+    } else if (lower === 'whoami') {
+      newHistory.push({
+        type: 'output',
+        text: `Host Identity: darshan@p (Adversary Profile)
+Assigned Role: ATTACKER
+Privilege Level: Unrestricted Sandbox Emulation
+Active Honey Tokens: 4 engaged
+Defense Status: Real-time HoneyShield SOC telemetry recording.`
+      });
+      triggerAttack('RECONNAISSANCE');
+    } else {
+      newHistory.push({
+        type: 'output',
+        text: `sh: ${raw}: command not found. Type "help" for interactive exploit commands.`
+      });
+      triggerAttack('RECONNAISSANCE');
+    }
+
+    setHistory(newHistory);
+    setCmd('');
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: '16px' }}>
+      {/* Top Bar with Quick Exploit Action Badges */}
+      <div style={{ background: '#161B22', borderRadius: '12px', padding: '16px 20px', border: '1px solid #30363D', display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
+        <div>
+          <h3 style={{ color: '#00FF88', margin: '0 0 4px', fontSize: '15px', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Terminal size={18} /> Interactive Adversary Exploit Console
+          </h3>
+          <p style={{ color: '#8B949E', margin: 0, fontSize: '12px' }}>
+            Direct interactive penetration testing CLI. Every payload executed triggers continuous police sirens and alerts SOC command.
+          </p>
+        </div>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          {[
+            { label: '⚡ Nmap Scan', cmd: 'nmap -sV target', color: '#38BDF8' },
+            { label: '💉 SQLMap Dump', cmd: 'sqlmap -u /api/users --dump', color: '#F59E0B' },
+            { label: '🔨 Hydra Brute', cmd: 'hydra -l admin -P wordlist.txt', color: '#EF4444' },
+            { label: '📂 Read /etc/shadow', cmd: 'cat /etc/shadow', color: '#A855F7' },
+            { label: '💥 RCE Shell', cmd: 'rce --exec "id; uname -a"', color: '#EC4899' },
+            { label: '📤 Exfiltrate DB', cmd: 'exfil --payroll', color: '#10B981' }
+          ].map(btn => (
+            <button
+              key={btn.label}
+              onClick={() => runCommand(btn.cmd)}
+              style={{
+                padding: '6px 12px',
+                background: 'rgba(255,255,255,0.05)',
+                border: `1px solid ${btn.color}40`,
+                color: btn.color,
+                borderRadius: '6px',
+                fontSize: '11px',
+                fontWeight: 700,
+                cursor: 'pointer',
+                transition: 'all 0.2s'
+              }}
+              onMouseEnter={e => { e.currentTarget.style.background = `${btn.color}20`; }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.05)'; }}
+            >
+              {btn.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Terminal Display */}
+      <div style={{
+        flex: 1,
+        minHeight: '380px',
+        background: '#090D13',
+        borderRadius: '12px',
+        border: '1px solid #30363D',
+        padding: '20px',
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+        fontSize: '13px',
+        color: '#C9D1D9',
+        overflowY: 'auto',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '8px',
+        boxShadow: 'inset 0 2px 10px rgba(0,0,0,0.8)'
+      }}>
+        {history.map((h, i) => (
+          <div key={i} style={{
+            color: h.type === 'input' ? '#58A6FF' : h.type === 'system' ? '#8B949E' : '#00FF88',
+            whiteSpace: 'pre-wrap',
+            lineHeight: '1.6'
+          }}>
+            {h.text}
+          </div>
+        ))}
+        <div ref={bottomRef} />
+      </div>
+
+      {/* Command Input Bar */}
+      <form onSubmit={(e) => { e.preventDefault(); runCommand(); }} style={{ display: 'flex', gap: '8px' }}>
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', background: '#161B22', border: '1px solid #30363D', borderRadius: '8px', padding: '0 14px' }}>
+          <span style={{ color: '#00FF88', fontWeight: 700, fontFamily: 'monospace', marginRight: '8px' }}>root@adversary:~#</span>
+          <input
+            value={cmd}
+            onChange={e => setCmd(e.target.value)}
+            placeholder="Type exploit command (e.g. 'help', 'nmap', 'sqlmap', 'cat /etc/shadow', 'exfil')..."
+            style={{ flex: 1, padding: '12px 0', background: 'transparent', border: 'none', color: '#F0F6FC', fontSize: '13px', outline: 'none', fontFamily: 'monospace' }}
+            autoFocus
+          />
+        </div>
+        <button
+          type="submit"
+          style={{ padding: '0 24px', background: '#00FF88', color: '#0D1117', border: 'none', borderRadius: '8px', fontWeight: 800, cursor: 'pointer', fontSize: '13px' }}
+        >
+          Execute
+        </button>
+      </form>
+    </div>
+  );
+};
 
 const FakeDatabase = ({ triggerAttack, addToast, downloadFile }) => {
   const [query, setQuery] = useState('')
@@ -1137,6 +1369,7 @@ export default function DeceptionDashboard({ currentUser, onLogout, onAttackerAc
   const [modal, setModal] = useState(null) // { type, data }
   const [isBlocked, setIsBlocked] = useState(false)
   const [blockedReason, setBlockedReason] = useState(null)
+  const [showBlockedModal, setShowBlockedModal] = useState(false)
 
   const triggerAttack = useCallback(async (actionType) => {
     console.log('[DECEPTION] triggerAttack called:', actionType)
@@ -1145,6 +1378,7 @@ export default function DeceptionDashboard({ currentUser, onLogout, onAttackerAc
       if (res?.blocked) {
         setBlockedReason(res.reason || 'default')
         setIsBlocked(true)
+        setShowBlockedModal(true)
       }
     } else {
       console.error('[DECEPTION] onAttackerAction is NOT a function. Type:', typeof onAttackerAction)
@@ -1202,6 +1436,7 @@ export default function DeceptionDashboard({ currentUser, onLogout, onAttackerAc
     const props = { triggerAttack, addToast, downloadFile, modal, setModal }
     switch (activePage) {
       case 'Dashboard':          return <FakeDashboard {...props} />
+      case 'Exploit Console':    return <FakeExploitConsole {...props} />
       case 'Database':           return <FakeDatabase {...props} />
       case 'My Files':           return <FakeFiles {...props} />
       case 'Employee Directory': return <FakeDirectory {...props} />
@@ -1218,6 +1453,41 @@ export default function DeceptionDashboard({ currentUser, onLogout, onAttackerAc
   }
 
   if (isBlocked) {
+    if (showBlockedModal) {
+      return (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.92)', backdropFilter: 'blur(10px)', zIndex: 99999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', fontFamily: 'system-ui, sans-serif' }}>
+          <div style={{ background: '#161B22', border: '2px solid #FF4444', borderRadius: '16px', maxWidth: '540px', width: '100%', padding: '32px', boxShadow: '0 0 60px rgba(255, 68, 68, 0.45)', textAlign: 'center', animation: 'scaleUp 0.3s ease-out' }}>
+            <div style={{ width: '68px', height: '68px', borderRadius: '50%', background: 'rgba(255,68,68,0.15)', border: '2px solid #FF4444', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px', color: '#FF4444' }}>
+              <ShieldAlert size={38} />
+            </div>
+            <div style={{ padding: '5px 14px', background: 'rgba(255,68,68,0.2)', border: '1px solid #FF4444', borderRadius: '20px', display: 'inline-block', color: '#FF4444', fontSize: '11px', fontWeight: 900, letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '14px' }}>
+              🚨 ACCESS REVOKED · SECURITY CONTAINMENT
+            </div>
+            <h2 style={{ color: '#F8FAFC', margin: '0 0 10px', fontSize: '22px', fontWeight: 800 }}>
+              Host Quarantined & Blocked by SOC
+            </h2>
+            <p style={{ color: '#94A3B8', fontSize: '13px', lineHeight: '1.6', margin: '0 0 20px' }}>
+              Your connection has been intercepted and blacklisted by the HoneyShield SOC Administrator.
+              All active network routes and hardware device hashes have been recorded.
+            </p>
+            <div style={{ background: '#0D1117', border: '1px solid #30363D', borderRadius: '8px', padding: '14px 16px', marginBottom: '24px', textAlign: 'left', fontSize: '12px', fontFamily: 'monospace' }}>
+              <div style={{ color: '#FF6B6B', marginBottom: '5px', fontWeight: 700 }}>● Status: Quarantined & Blacklisted</div>
+              <div style={{ color: '#8B949E', marginBottom: '5px' }}>● Incident ID: HS-SOC-BLOCK-{Date.now().toString().slice(-6)}</div>
+              <div style={{ color: '#8B949E', marginBottom: '5px' }}>● Siren Alarm: Muted upon SOC Containment</div>
+              <div style={{ color: '#00FF88' }}>● Private/Incognito & VPN bypass protection: Active</div>
+            </div>
+            <button
+              onClick={() => setShowBlockedModal(false)}
+              style={{ width: '100%', padding: '12px', background: '#FF4444', color: '#FFFFFF', border: 'none', borderRadius: '8px', fontWeight: 800, fontSize: '13px', cursor: 'pointer', transition: 'background 0.2s' }}
+              onMouseEnter={e => e.currentTarget.style.background = '#E03131'}
+              onMouseLeave={e => e.currentTarget.style.background = '#FF4444'}
+            >
+              View Full Forensic Containment Terminal →
+            </button>
+          </div>
+        </div>
+      )
+    }
     return <BlockedScreen reason={blockedReason} session={currentUser} />
   }
 
@@ -1236,6 +1506,7 @@ export default function DeceptionDashboard({ currentUser, onLogout, onAttackerAc
             const isActive = activePage === item.id
             const Icon = {
               'Dashboard': Activity,
+              'Exploit Console': Terminal,
               'Database': Database,
               'My Files': Folder,
               'Employee Directory': Users,

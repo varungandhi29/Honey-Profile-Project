@@ -238,14 +238,45 @@ export default function LoginPage({ onLogin, loginError }) {
           {loading ? 'AUTHENTICATING...' : 'LOGIN'}
         </button>
 
-        <div style={{ marginTop: '24px', fontSize: '12px', color: '#8B949E', textAlign: 'left', background: '#0D1117', padding: '10px', borderRadius: '8px' }}>
-          <div><strong>Demo Credentials:</strong></div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}>
-            <span>Admin: admin / admin123</span>
-            <span>User: user / user123</span>
+        <div style={{ marginTop: '20px', fontSize: '11px', color: '#8B949E', textAlign: 'left', background: 'rgba(13, 17, 23, 0.8)', border: '1px solid #30363D', padding: '12px', borderRadius: '10px' }}>
+          <div style={{ color: '#00FF88', fontWeight: 'bold', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>Demo System Accounts (Click to fill):</span>
           </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}>
-            <span>Attacker: testuser / testuser123</span>
+          <div 
+            onClick={() => { setUsername('varun@g'); setPassword('varun@29'); }}
+            style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 6px', borderRadius: '4px', cursor: 'pointer', background: 'rgba(0, 255, 136, 0.05)', marginBottom: '4px' }}
+            onMouseEnter={e => e.currentTarget.style.background = 'rgba(0, 255, 136, 0.15)'}
+            onMouseLeave={e => e.currentTarget.style.background = 'rgba(0, 255, 136, 0.05)'}
+          >
+            <span style={{ color: '#00FF88', fontWeight: 600 }}>🛡️ Admin: varun@g</span>
+            <span style={{ color: '#C9D1D9', fontFamily: 'monospace' }}>varun@29</span>
+          </div>
+          <div 
+            onClick={() => { setUsername('darshan@p'); setPassword('darshan@123'); }}
+            style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 6px', borderRadius: '4px', cursor: 'pointer', background: 'rgba(255, 110, 110, 0.05)', marginBottom: '4px' }}
+            onMouseEnter={e => e.currentTarget.style.background = 'rgba(255, 110, 110, 0.15)'}
+            onMouseLeave={e => e.currentTarget.style.background = 'rgba(255, 110, 110, 0.05)'}
+          >
+            <span style={{ color: '#FF7B72', fontWeight: 600 }}>⚔️ Attacker: darshan@p</span>
+            <span style={{ color: '#C9D1D9', fontFamily: 'monospace' }}>darshan@123</span>
+          </div>
+          <div 
+            onClick={() => { setUsername('dhruv@l'); setPassword('dhruv@123'); }}
+            style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 6px', borderRadius: '4px', cursor: 'pointer', background: 'rgba(88, 166, 255, 0.05)', marginBottom: '4px' }}
+            onMouseEnter={e => e.currentTarget.style.background = 'rgba(88, 166, 255, 0.15)'}
+            onMouseLeave={e => e.currentTarget.style.background = 'rgba(88, 166, 255, 0.05)'}
+          >
+            <span style={{ color: '#58A6FF', fontWeight: 600 }}>👤 User 1: dhruv@l</span>
+            <span style={{ color: '#C9D1D9', fontFamily: 'monospace' }}>dhruv@123</span>
+          </div>
+          <div 
+            onClick={() => { setUsername('rudra@b'); setPassword('rudra@123'); }}
+            style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 6px', borderRadius: '4px', cursor: 'pointer', background: 'rgba(88, 166, 255, 0.05)' }}
+            onMouseEnter={e => e.currentTarget.style.background = 'rgba(88, 166, 255, 0.15)'}
+            onMouseLeave={e => e.currentTarget.style.background = 'rgba(88, 166, 255, 0.05)'}
+          >
+            <span style={{ color: '#58A6FF', fontWeight: 600 }}>👤 User 2: rudra@b</span>
+            <span style={{ color: '#C9D1D9', fontFamily: 'monospace' }}>rudra@123</span>
           </div>
         </div>
       </div>

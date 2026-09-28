@@ -1,8 +1,30 @@
-export const USERS = [
-  { username: 'admin',    password: 'admin123',    role: 'ADMIN' },
-  { username: 'user',     password: 'user123',     role: 'USER' },
-  { username: 'testuser', password: 'testuser123', role: 'ATTACKER' },
+export const DEFAULT_USERS = [
+  { id: 'u1', username: 'varun@g', password: 'varun@29', role: 'ADMIN', name: 'Varun Gandhi', status: 'ACTIVE', dept: 'SecOps Command' },
+  { id: 'u2', username: 'darshan@p', password: 'darshan@123', role: 'ATTACKER', name: 'Darshan Patel', status: 'ACTIVE', dept: 'External Adversary' },
+  { id: 'u3', username: 'dhruv@l', password: 'dhruv@123', role: 'USER', name: 'Dhruv Lad', status: 'ACTIVE', dept: 'Engineering' },
+  { id: 'u4', username: 'rudra@b', password: 'rudra@123', role: 'USER', name: 'Rudra Barot', status: 'ACTIVE', dept: 'Finance & Accounts' },
 ]
+
+export const getUsers = () => {
+  try {
+    const saved = typeof window !== 'undefined' ? localStorage.getItem('honeyshield_users') : null
+    if (saved) {
+      const parsed = JSON.parse(saved)
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed
+    }
+  } catch {}
+  return DEFAULT_USERS
+}
+
+export const saveUsers = (users) => {
+  try {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('honeyshield_users', JSON.stringify(users))
+    }
+  } catch {}
+}
+
+export const USERS = getUsers()
 
 export const ATTACK_TYPES = {
   BRUTE_FORCE:          { label:'Brute Force',          riskDelta:20, severity:'HIGH',     target:'Login Page' },
@@ -102,6 +124,7 @@ export const ADMIN_NAV = [
   { id:'Geo Map',             label:'Geo Map' },
   { id:'Heatmap',             label:'Heatmap' },
   { id:'Alert Center',        label:'Alert Center' },
+  { id:'User Management',     label:'User Management' },
   { id:'FP/FN Analysis',      label:'FP/FN Analysis' },
   { id:'AI Insights',         label:'AI Insights' },
   { id:'Data Vault',          label:'Data Vault' },
@@ -111,12 +134,15 @@ export const ADMIN_NAV = [
 ]
 
 export const USER_NAV = [
-  { id:'Overview',   label:'Overview' },
-  { id:'Data Vault', label:'Data Vault' },
+  { id:'Workspace',      label:'My Workspace' },
+  { id:'Report Incident',label:'Report Incident' },
+  { id:'Company Vault',  label:'Company Documents' },
+  { id:'Profile',        label:'Security Profile' },
 ]
 
 export const DECEPTION_NAV = [
   { id:'Dashboard',          label:'Dashboard' },
+  { id:'Exploit Console',    label:'Exploit Console' },
   { id:'Database',           label:'Database' },
   { id:'My Files',           label:'My Files' },
   { id:'Employee Directory', label:'Employee Directory' },

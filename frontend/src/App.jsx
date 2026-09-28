@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import LiveDataEngine from './engine/LiveDataEngine'
-import { USERS, ATTACK_TYPES, HONEY_TARGET_MAP } from './engine/constants'
+import { USERS, getUsers, ATTACK_TYPES, HONEY_TARGET_MAP } from './engine/constants'
 import { useSocket } from './hooks/useSocket'
 import { useNotifications } from './hooks/useNotifications'
 import { generateFingerprint } from './utils/fingerprint'
@@ -8,6 +8,7 @@ import { alertEngine } from './audio/alertEngine'
 import LoginPage from './pages/LoginPage'
 import AdminDashboard from './pages/AdminDashboard'
 import DeceptionDashboard from './pages/DeceptionDashboard'
+import UserDashboard from './pages/UserDashboard'
 import BlockedScreen from './components/BlockedScreen'
 import UnblockedScreen from './components/UnblockedScreen'
 import VerifyingScreen from './components/VerifyingScreen'
@@ -64,11 +65,26 @@ export default function App() {
     } catch {}
 
     // FAST-PATH: If this client has no prior block flag in localStorage,
-    // NEVER call check-status. Skip verification entirely and render normal app/login immediately.
-    // Real security enforcement lives server-side on login/register endpoints.
+    // render normal app/login immediately, but perform a fast background hardware fingerprint check
+    // to enforce persistent containment even in Private / Incognito browser windows.
     if (!wasLocallyFlagged) {
       setVerificationState('IDLE')
       setAppBlocked(false)
+      generateFingerprint().then(fp => {
+        if (!fp || isCancelled) return
+        fetch(`${BACKEND}/api/blocklist/check-status?fingerprint=${encodeURIComponent(fp)}`, {
+          signal: AbortSignal.timeout(4000)
+        }).then(r => r.json()).then(data => {
+          if (!isCancelled && data && data.blocked === true) {
+            setVerificationState('CONFIRMED_BLOCKED')
+            setAppBlocked(true)
+            setAppBlockedReason(data.reason || 'FINGERPRINT_BLOCKED')
+            try {
+              localStorage.setItem('honeyshield_blocked', JSON.stringify({ blocked: true, reason: 'FINGERPRINT_BLOCKED', fingerprint: fp }))
+            } catch {}
+          }
+        }).catch(() => {})
+      }).catch(() => {})
       return
     }
 
@@ -533,10 +549,24 @@ export default function App() {
       }
     }
 
-    // Local / Standalone authentication fallback against USERS registry
+    // Local / Standalone authentication fallback against dynamic USERS registry
+    const allUsers = getUsers()
     const cleanUsername = credentials.username?.trim().toLowerCase()
     const cleanPassword = credentials.password?.trim()
-    const matchedUser = USERS.find(u => u.username.toLowerCase() === cleanUsername && u.password === cleanPassword)
+    const matchedUser = allUsers.find(u => u.username.toLowerCase() === cleanUsername && u.password === cleanPassword)
+
+    // Check hardware fingerprint against blocklist (prevents bypass in Incognito/Private windows)
+    let blockedFPs = []
+    try {
+      blockedFPs = JSON.parse(localStorage.getItem('honeyshield_blocked_fingerprints') || '[]')
+    } catch {}
+
+    if (blockedFPs.includes(fingerprint) && matchedUser?.role !== 'ADMIN') {
+      setAppBlockedReason('FINGERPRINT_BLOCKED')
+      setAppBlocked(true)
+      alertEngine.playBlocked()
+      return
+    }
 
     if (matchedUser) {
       // Check if client is using VPN/Proxy or is already blocked (Admins exempt)
@@ -558,7 +588,7 @@ export default function App() {
       }
 
       if (matchedUser.role === 'ADMIN') {
-        const adminUser = { username: matchedUser.username, role: 'ADMIN', isAdmin: true }
+        const adminUser = { username: matchedUser.username, name: matchedUser.name || 'Administrator', role: 'ADMIN', isAdmin: true }
         setCurrentUser(adminUser)
         sessionIdRef.current = `ADMIN-${Date.now()}`
         addToast('Welcome Admin!', 'success')
@@ -573,6 +603,7 @@ export default function App() {
       } else if (matchedUser.role === 'ATTACKER') {
         const trappedUser = {
           username: matchedUser.username,
+          name: matchedUser.name || 'External Adversary',
           role: 'ATTACKER',
           sessionId: `TRAP-${Date.now()}`,
           isTrapped: true
@@ -592,16 +623,18 @@ export default function App() {
       } else {
         const normalUser = {
           username: matchedUser.username,
+          name: matchedUser.name || matchedUser.username,
+          dept: matchedUser.dept || 'Engineering',
           role: 'USER',
           sessionId: `USER-${Date.now()}`
         }
         setCurrentUser(normalUser)
         sessionIdRef.current = normalUser.sessionId
-        addToast(`Welcome ${matchedUser.username}!`, 'success')
+        addToast(`Welcome ${matchedUser.name || matchedUser.username}!`, 'success')
         return
       }
     } else {
-      if (cleanUsername === 'admin') {
+      if (cleanUsername === 'varun@g' || cleanUsername === 'admin') {
         setLoginError('Invalid admin credentials')
       } else {
         setLoginError('Invalid username or password')
@@ -873,6 +906,7 @@ export default function App() {
 
   if (!currentUser) return (<><ToastContainer /><LoginPage onLogin={handleLogin} loginError={loginError} /></>)
   if (currentUser.role === 'ATTACKER') return (<><ToastContainer /><DeceptionDashboard currentUser={currentUser} onLogout={handleLogout} onAttackerAction={handleAttackerAction} /></>)
+  if (currentUser.role === 'USER') return (<><ToastContainer /><UserDashboard currentUser={currentUser} onLogout={handleLogout} addToast={addToast} /></>)
   return (
     <>
       <ToastContainer />

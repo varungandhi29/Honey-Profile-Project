@@ -9,6 +9,8 @@ import Attack from '../models/Attack.js'
 import HoneyLog from '../models/HoneyLog.js'
 import Alert from '../models/Alert.js'
 import Employee from '../models/Employee.js'
+import BlockedFingerprint from '../models/BlockedFingerprint.js'
+import mongoose from 'mongoose'
 import { cache } from '../services/cacheService.js'
 import logger from '../middleware/logger.js'
 import { encrypt } from '../services/dataVaultService.js'
@@ -22,17 +24,37 @@ router.post('/login', async (req, res) => {
 
   logger.info(`[HONEYPOT LOGIN] Attempt: ${username || 'anonymous'} from ${ip}`)
 
-  // STEP 1 — Check if already blocked
+  // STEP 1 — Check if already blocked (IP or persistent hardware Fingerprint)
   const ipBlocked = await cache.get(`blocked:${ip}`)
   if (ipBlocked?.blocked) {
     broadcast('blocked_attempt', {
       ip,
       username,
       method: 'IP_BLOCK',
-      message: `Previously blocked ${ip} tried to login as ${username}`,
+      message: `Previously blocked IP ${ip} tried to login as ${username}`,
       timestamp: new Date().toISOString()
     })
     return res.status(403).json({ error: 'Blocked', blocked: true, reason: 'IP_BLOCKED' })
+  }
+
+  if (fingerprint) {
+    const fpBlocked = await cache.get(`blocked:fp:${fingerprint}`)
+    let isFpBlocked = fpBlocked?.blocked
+    if (!isFpBlocked && mongoose.connection.readyState === 1) {
+      const dbFp = await BlockedFingerprint.findOne({ fingerprint })
+      if (dbFp) isFpBlocked = true
+    }
+    if (isFpBlocked) {
+      broadcast('blocked_attempt', {
+        ip,
+        fingerprint,
+        username,
+        method: 'FINGERPRINT_BLOCK',
+        message: `Blocked hardware fingerprint tried to login as ${username} from ${ip}`,
+        timestamp: new Date().toISOString()
+      })
+      return res.status(403).json({ error: 'Blocked', blocked: true, reason: 'FINGERPRINT_BLOCKED' })
+    }
   }
 
   // STEP 2 — Run attack detection

@@ -639,16 +639,17 @@ router.get('/check-status', checkStatusLimiter, async (req, res) => {
       }
     }
 
-    // Check valid Fingerprint block (if matched active session)
-    if (validFP) {
-      const cachedFP = await cache.get(`blocked:fp:${validFP}`)
+    // Check Fingerprint block (validFP from active session OR directly submitted hardware fingerprint)
+    const targetFP = validFP || submittedFP
+    if (targetFP && typeof targetFP === 'string') {
+      const cachedFP = await cache.get(`blocked:fp:${targetFP}`)
       if (cachedFP?.blocked) {
-        return res.json({ blocked: true })
+        return res.json({ blocked: true, reason: 'FINGERPRINT_BLOCKED' })
       }
       if (mongoose.connection.readyState === 1) {
-        const dbFP = await BlockedFingerprint.findOne({ fingerprint: validFP })
+        const dbFP = await BlockedFingerprint.findOne({ fingerprint: targetFP })
         if (dbFP) {
-          return res.json({ blocked: true })
+          return res.json({ blocked: true, reason: 'FINGERPRINT_BLOCKED' })
         }
       }
     }
