@@ -17,6 +17,7 @@ import LiveTrackingPage from './admin/LiveTrackingPage';
 import BlockedIPsPage from './admin/BlockedIPsPage';
 import HoneyTrapsPage from './admin/HoneyTrapsPage';
 import UserManagementPage from './admin/UserManagementPage';
+import SecureVaultPage from './admin/SecureVaultPage';
 
 class ErrorBoundary extends React.Component {
   constructor(props) {
@@ -113,9 +114,10 @@ export default function AdminDashboard({ currentUser, onLogout, data, engineRef,
       case 'Heatmap': return <HeatmapPage data={safeData} />;
       case 'Alert Center': return <AlertCenterPage data={safeData} engineRef={engineRef} />;
       case 'User Management': return <UserManagementPage currentUser={currentUser} addToast={data?.addToast} />;
+      case 'Secure Storage': return <SecureVaultPage currentUser={currentUser} addToast={data?.addToast} />;
       case 'FP/FN Analysis': return <FPFNAnalysisPage data={safeData} engineRef={engineRef} settings={settings} />;
       case 'AI Insights': return <AIInsightsPage data={safeData} backendOnline={backendOnline} />;
-      case 'Data Vault': return <DataVaultPage data={safeData} currentUser={currentUser} />;
+      case 'Data Vault': return <SecureVaultPage currentUser={currentUser} addToast={data?.addToast} />;
       case 'Live Tracking': return <LiveTrackingPage data={safeData} onBlockIP={onBlockIP} onBlockFingerprint={onBlockFingerprint} backendOnline={backendOnline} />;
       case 'Blocked IPs': return <BlockedIPsPage data={safeData} onBlockIP={onBlockIP} onUnblockIP={onUnblockIP} onBlockFingerprint={onBlockFingerprint} onUnblockFingerprint={onUnblockFingerprint} onUnblockClient={onUnblockClient} backendOnline={backendOnline} />;
       case 'Settings': return <SettingsPage settings={settings} setSettings={setSettings} data={safeData} backendOnline={backendOnline} />;

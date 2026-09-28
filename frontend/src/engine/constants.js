@@ -125,6 +125,7 @@ export const ADMIN_NAV = [
   { id:'Heatmap',             label:'Heatmap' },
   { id:'Alert Center',        label:'Alert Center' },
   { id:'User Management',     label:'User Management' },
+  { id:'Secure Storage',      label:'Secure Storage' },
   { id:'FP/FN Analysis',      label:'FP/FN Analysis' },
   { id:'AI Insights',         label:'AI Insights' },
   { id:'Data Vault',          label:'Data Vault' },

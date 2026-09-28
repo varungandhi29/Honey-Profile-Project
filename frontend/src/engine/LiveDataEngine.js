@@ -1,25 +1,51 @@
 import { ATTACK_TYPES, HONEY_TARGET_MAP } from './constants'
+import { honeyBus } from '../utils/honeyBus'
 
 class LiveDataEngine {
   constructor(updateCallback) {
-    this.sessions = []
-    this.attackLog = []
-    this.honeyLog = []
-    this.alertLog = []
-    this.autoResponseLog = []
     this.updateCallback = updateCallback
     this.intervals = []
     this.attackerTimers = []
-    // Load persisted blocked IPs from localStorage
+
+    // Load persisted state from localStorage
     let savedBlockedIPs = []
     let savedBlockLog = []
+    let savedSessions = []
+    let savedAttacks = []
+    let savedHoneyLogs = []
+    let savedAlerts = []
     try {
       savedBlockedIPs = JSON.parse(localStorage.getItem('honeyshield_blocked_ips') || '[]')
       savedBlockLog = JSON.parse(localStorage.getItem('honeyshield_block_log') || '[]')
+      savedSessions = JSON.parse(localStorage.getItem('honeyshield_live_sessions') || '[]')
+      savedAttacks = JSON.parse(localStorage.getItem('honeyshield_live_attacks') || '[]')
+      savedHoneyLogs = JSON.parse(localStorage.getItem('honeyshield_live_honeylogs') || '[]')
+      savedAlerts = JSON.parse(localStorage.getItem('honeyshield_live_alerts') || '[]')
     } catch {}
 
     this.blockedIPs = new Set(savedBlockedIPs)
-    this.blockLog = savedBlockLog
+    this.blockLog = Array.isArray(savedBlockLog) ? savedBlockLog : []
+    this.sessions = Array.isArray(savedSessions) ? savedSessions : []
+    this.attackLog = Array.isArray(savedAttacks) ? savedAttacks : []
+    this.honeyLog = Array.isArray(savedHoneyLogs) ? savedHoneyLogs : []
+    this.alertLog = Array.isArray(savedAlerts) ? savedAlerts : []
+    this.autoResponseLog = []
+
+    // Subscribe to cross-tab / cross-window real-time events via HoneyBus
+    this.unsubscribeHoneyBus = honeyBus.subscribe((event) => {
+      if (!event || !event.type) return
+      if (event.type === 'SESSION_JOINED' && event.payload?.session) {
+        this.updateSession(event.payload.session)
+      } else if (event.type === 'ATTACK_EVENT' && event.payload) {
+        const { attack, alert, honeyLog, session } = event.payload
+        if (attack) this.injectAttackEvent(attack)
+        if (alert) this.injectAlert(alert)
+        if (honeyLog) this.injectHoneyEvent(honeyLog)
+        if (session) this.updateSession(session)
+      } else if (event.type === 'BLOCK_IP' && event.payload?.ip) {
+        this.blockIP(event.payload.ip, event.payload.blockedBy, event.payload.reason)
+      }
+    })
   }
 
   blockIP(ip, blockedBy = 'admin', reason = 'Manual block') {
@@ -84,7 +110,15 @@ class LiveDataEngine {
     }
   }
 
-  pushUpdate() { this.updateCallback(this.getState()) }
+  pushUpdate() {
+    try {
+      localStorage.setItem('honeyshield_live_sessions', JSON.stringify(this.sessions))
+      localStorage.setItem('honeyshield_live_attacks', JSON.stringify(this.attackLog.slice(0, 100)))
+      localStorage.setItem('honeyshield_live_honeylogs', JSON.stringify(this.honeyLog.slice(0, 100)))
+      localStorage.setItem('honeyshield_live_alerts', JSON.stringify(this.alertLog.slice(0, 100)))
+    } catch {}
+    this.updateCallback(this.getState())
+  }
 
   async syncFromBackend(backendUrl) {
     try {
@@ -235,6 +269,7 @@ class LiveDataEngine {
       isRealUser: true
     }
     this.sessions.push(session)
+    honeyBus.publish('SESSION_JOINED', { session })
     if (isAttacker) this.startAttackerAutoTriggers(session)
     const durationInterval = setInterval(() => {
       const idx = this.sessions.findIndex(x => x.id === session.id)
@@ -304,15 +339,24 @@ class LiveDataEngine {
     this.honeyLog.unshift(honeyEvent)
     if (this.honeyLog.length > 500) this.honeyLog.pop()
     session.honeyInteractions = (session.honeyInteractions || 0) + 1
-    this.alertLog.unshift({
+    const alertObj = {
       id: `ALERT-${Date.now()}-${Math.random().toString(36).substr(2,4)}`, severity: attackDef.severity || 'HIGH',
       title: `${attackDef.label} Detected`,
       description: `${attackDef.label} attack executed by ${session.username} (${session.ip}) targeting ${attackDef.target}`,
       sessionId: session.id, sourceIP: session.ip, timestamp: event.timestamp, status: 'New'
-    })
+    }
+    this.alertLog.unshift(alertObj)
     if (this.alertLog.length > 200) this.alertLog.pop()
     this.sessions[sessionIdx] = session
     this.pushUpdate()
+
+    // Broadcast live attack event to Admin SOC across all open tabs/windows
+    honeyBus.publish('ATTACK_EVENT', {
+      attack: event,
+      alert: alertObj,
+      honeyLog: honeyEvent,
+      session
+    })
   }
 
   // Inject from Socket.io real-time events
@@ -441,7 +485,8 @@ class LiveDataEngine {
   }
 
   removeSession(username) {
-    this.sessions = this.sessions.filter(s => s.username !== username)
+    // Only remove normal users; preserve attacker sessions in SOC forensic records!
+    this.sessions = this.sessions.filter(s => s.username !== username || s.role === 'ATTACKER')
     this.attackerTimers?.forEach(t => { clearInterval(t); clearTimeout(t) })
     this.attackerTimers = []
     this.pushUpdate()
@@ -514,6 +559,7 @@ class LiveDataEngine {
   }
 
   destroy() {
+    this.unsubscribeHoneyBus?.()
     this.intervals?.forEach(i => clearInterval(i))
     this.attackerTimers?.forEach(t => { clearInterval(t); clearTimeout(t) })
   }

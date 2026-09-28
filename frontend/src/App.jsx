@@ -5,6 +5,7 @@ import { useSocket } from './hooks/useSocket'
 import { useNotifications } from './hooks/useNotifications'
 import { generateFingerprint } from './utils/fingerprint'
 import { alertEngine } from './audio/alertEngine'
+import { honeyBus } from './utils/honeyBus'
 import LoginPage from './pages/LoginPage'
 import AdminDashboard from './pages/AdminDashboard'
 import DeceptionDashboard from './pages/DeceptionDashboard'
@@ -52,6 +53,34 @@ export default function App() {
     engineRef.current = new LiveDataEngine(newState => setData({ ...newState }))
     return () => engineRef.current?.destroy()
   }, [])
+
+  // Cross-tab real-time sync via HoneyBus (detects attacks launched in any tab/window)
+  useEffect(() => {
+    const unsub = honeyBus.subscribe((e) => {
+      if (!e || !e.type) return
+      if (e.type === 'ATTACK_EVENT') {
+        const attack = e.payload?.attack
+        const severity = attack?.severity || 'CRITICAL'
+        alertEngine.stopContinuousAlert()
+        alertEngine.startContinuousAlert(severity, 6000)
+        setForceUpdate(p => p + 1)
+        addToast(`🚨 CRITICAL: ${attack?.type || 'Attack'} from ${attack?.sourceIP || 'Adversary'}`, 'critical')
+      } else if (e.type === 'SESSION_JOINED') {
+        const s = e.payload?.session
+        if (s?.role === 'ATTACKER') {
+          alertEngine.stopContinuousAlert()
+          alertEngine.startContinuousAlert('CRITICAL', 6000)
+          setForceUpdate(p => p + 1)
+          addToast(`🚨 ADVERSARY INFILTRATION: ${s.username} connected`, 'critical')
+        }
+      } else if (e.type === 'BLOCK_IP' || e.type === 'CLIENT_BLOCKED') {
+        alertEngine.stopContinuousAlert()
+        alertEngine.playBlocked()
+        setForceUpdate(p => p + 1)
+      }
+    })
+    return () => unsub()
+  }, [addToast])
 
   // Only reconcile / verify clients who ALREADY have a local block flag from a prior session.
   // Ordinary, unflagged visitors skip check-status entirely and render normal app/login immediately.
@@ -654,7 +683,9 @@ export default function App() {
     if (backendOnline && sessionIdRef.current) {
       fetch(`${BACKEND}/api/session/${sessionIdRef.current}`, { method:'DELETE' }).catch(() => {})
     }
-    engineRef.current?.removeSession(currentUser?.username)
+    if (currentUser?.role !== 'ATTACKER') {
+      engineRef.current?.removeSession(currentUser?.username)
+    }
     setCurrentUser(null)
     sessionIdRef.current = null
     alertEngine.stopContinuousAlert()
