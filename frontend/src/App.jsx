@@ -539,6 +539,24 @@ export default function App() {
     const matchedUser = USERS.find(u => u.username.toLowerCase() === cleanUsername && u.password === cleanPassword)
 
     if (matchedUser) {
+      // Check if client is using VPN/Proxy or is already blocked (Admins exempt)
+      const isVpnDetected = /vpn|proxy|tor|hosting|datacenter|cloud|digitalocean|amazon|aws|google cloud|m247|nord|express|proton|packet exchange|ovh|hetzner/i.test(location.isp || '') || /vpn|proxy|tor/i.test(location.city || '')
+      if (isVpnDetected && matchedUser.role !== 'ADMIN') {
+        setVpnInfo({ ip: location.ip || '127.0.0.1', label: `${location.isp || 'VPN/Proxy'} Detected` })
+        setAppBlockedReason('VPN_PROXY_DETECTED')
+        setVpnBlocked(true)
+        setAppBlocked(true)
+        alertEngine.playVPNDetected()
+        return
+      }
+
+      if ((engineRef.current?.isIPBlocked(location.ip) || localStorage.getItem('honeyshield_blocked')) && matchedUser.role !== 'ADMIN') {
+        setAppBlockedReason('IP_BLOCKED')
+        setAppBlocked(true)
+        alertEngine.playBlocked()
+        return
+      }
+
       if (matchedUser.role === 'ADMIN') {
         const adminUser = { username: matchedUser.username, role: 'ADMIN', isAdmin: true }
         setCurrentUser(adminUser)
@@ -770,6 +788,11 @@ export default function App() {
     const fingerprint = await generateFingerprint()
 
     engineRef.current?.registerAttackerAction(actionType, sid)
+
+    // Trigger police car siren continuous alert on attacker action
+    alertEngine.stopContinuousAlert()
+    alertEngine.startContinuousAlert(attackDef.severity || 'CRITICAL', 6000)
+    setForceUpdate(p => p + 1)
 
     if (backendOnline) {
       try {
