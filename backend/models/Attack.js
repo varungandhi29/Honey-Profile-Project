@@ -6,6 +6,8 @@ const attackSchema = new mongoose.Schema({
   sourceIP:      { type: String, required: true, index: true },
   sourceCountry: { type: String, default: 'Unknown', index: true },
   sourceCity:    { type: String, default: 'Unknown' },
+  sourceLat:     { type: Number, default: 0 },
+  sourceLng:     { type: Number, default: 0 },
   targetArea:    { type: String, required: true },
   riskDelta:     { type: Number, required: true },
   sessionId:     { type: String, required: true, index: true },

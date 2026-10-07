@@ -10,7 +10,7 @@ import Attack from '../models/Attack.js'
 import { cache } from '../services/cacheService.js'
 import { broadcast } from '../services/broadcastService.js'
 import { checkIPReputation } from '../services/ipReputationService.js'
-import { detectLocation } from '../middleware/geoip.js'
+import { detectLocation, resolveIPLocation } from '../middleware/geoip.js'
 import { requireAdmin } from '../middleware/auth.js'
 import logger from '../middleware/logger.js'
 
@@ -42,17 +42,19 @@ router.get('/', requireAdmin, async (req, res) => {
 router.post('/', requireAdmin, async (req, res) => {
   try {
     const { ip, reason, permanent, expiresAt } = req.body
-    const adminUsername = req.admin.username
+    const adminUsername = req.admin?.username || 'admin'
     if (!ip) return res.status(400).json({ error: 'IP required' })
 
     let blocked = { ip, blockedBy: adminUsername, reason: reason || 'Manual block by admin', blockedAt: new Date() }
     let terminatedCount = 0
+    let session = null
 
     if (mongoose.connection.readyState === 1) {
       try {
         const attackCount = await Attack.countDocuments({ sourceIP: ip })
-        const session = await Session.findOne({ ip })
+        session = await Session.findOne({ ip, isActive: true })
 
+        const geo = resolveIPLocation(ip)
         blocked = await BlockedIP.findOneAndUpdate(
           { ip },
           {
@@ -62,8 +64,8 @@ router.post('/', requireAdmin, async (req, res) => {
             attackCount,
             permanent: permanent !== false,
             expiresAt: expiresAt || null,
-            country: session?.country || 'Unknown',
-            city: session?.city || 'Unknown',
+            country: session?.country || geo?.country || 'Unknown',
+            city: session?.city || geo?.city || 'Unknown',
             blockedAt: new Date()
           },
           { upsert: true, new: true }
@@ -92,12 +94,21 @@ router.post('/', requireAdmin, async (req, res) => {
     // Cache blocked IP
     await cache.set(`blocked:${ip}`, { blocked: true, reason: blocked.reason || reason || 'Manual block by admin', blockedAt: new Date() }, 86400 * 365)
 
-    // Broadcast to admin
+    // After saving block, find the session for this IP and broadcast directly
+    if (session) {
+      broadcast('session_blocked', {
+        sessionId: session.sessionId,
+        ip,
+        username: session.username,
+        reason: req.body.reason || 'Blocked by admin',
+        timestamp: new Date().toISOString()
+      })
+    }
     broadcast('ip_blocked', {
       ip,
       blockedBy: adminUsername,
       reason: blocked.reason || 'Manual block',
-      sessionsTerminated: terminatedCount,
+      sessionsTerminated: session ? 1 : terminatedCount,
       timestamp: new Date().toISOString()
     })
 
@@ -109,135 +120,84 @@ router.post('/', requireAdmin, async (req, res) => {
   }
 })
 
-// DELETE /api/blocklist/:ip — unblock IP only (Admin only)
-router.delete('/:ip', requireAdmin, async (req, res) => {
-  const ip = decodeURIComponent(req.params.ip)
-  const adminUsername = req.admin.username
-  const cleared = {
-    ip: false,
-    redisBlocked: false,
-    redisFails: false,
-    redisRapid: false,
-    sessionsUpdated: 0,
-    vpnExempted: false
-  }
-  const errors = []
+// DELETE /api/blocklist/:ip — unblock IP completely
+router.delete('/:ip', async (req, res) => {
+  try {
+    const ip = decodeURIComponent(req.params.ip)
+    const reason = req.body?.reason || 'Admin manually unblocked'
 
-  let existingBlock = null
-  if (mongoose.connection.readyState === 1) {
+    logger.info(`[UNBLOCK] Attempting to unblock: ${ip}`)
+
+    // Step 1 — Remove from MongoDB completely
+    const deleteResult = await BlockedIP.deleteOne({ ip })
+    logger.info(`[UNBLOCK] MongoDB delete: ${deleteResult.deletedCount} documents removed`)
+
+    // Step 2 — Remove from Redis cache
     try {
-      existingBlock = await BlockedIP.findOne({ ip })
-      const delResult = await BlockedIP.deleteOne({ ip })
-      cleared.ip = delResult.deletedCount > 0
-    } catch (e) {
-      errors.push(`MongoDB BlockedIP delete failed: ${e.message}`)
+      await cache.del(`blocked:${ip}`)
+      await cache.del(`fails:${ip}`)
+      await cache.del(`rapid:${ip}`)
+      logger.info(`[UNBLOCK] Redis cache cleared for ${ip}`)
+    } catch (redisErr) {
+      logger.warn(`[UNBLOCK] Redis clear failed (continuing): ${redisErr.message}`)
     }
-  }
 
-  try {
-    await cache.del(`blocked:${ip}`)
-    cleared.redisBlocked = true
-  } catch (e) {
-    errors.push(`Redis blocked:${ip} del failed: ${e.message}`)
-  }
-
-  try {
-    await cache.del(`fails:${ip}`)
-    cleared.redisFails = true
-  } catch (e) {
-    errors.push(`Redis fails:${ip} del failed: ${e.message}`)
-  }
-
-  try {
-    await cache.del(`rapid:${ip}`)
-    cleared.redisRapid = true
-  } catch (e) {
-    errors.push(`Redis rapid:${ip} del failed: ${e.message}`)
-  }
-
-  // C1: CONDITIONAL VPN EXEMPTION — Create 24h record ONLY if checkIPReputation flags it as suspicious
-  try {
-    const rawRep = await checkIPReputation(ip, { bypassExemption: true })
-    if (rawRep.suspicious) {
-      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000)
-      if (mongoose.connection.readyState === 1) {
-        await ExemptedIP.findOneAndUpdate(
-          { ip },
-          {
-            ip,
-            exemptedBy: adminUsername,
-            reason: 'Admin exemption from automatic VPN/datacenter block',
-            originalReason: rawRep.label || 'Datacenter/VPN IP',
-            exemptedAt: new Date(),
-            expiresAt
-          },
-          { upsert: true, new: true }
-        )
-      }
-      await cache.set(`exempt:vpn:${ip}`, { exempted: true, exemptedBy: adminUsername }, 86400)
-      cleared.vpnExempted = true
-    } else {
-      cleared.vpnExempted = false
+    // Step 3 — Find and remove all fingerprints associated with this IP
+    const relatedFingerprints = await BlockedFingerprint.find({ associatedIPs: ip })
+    for (const fp of relatedFingerprints) {
+      try { await cache.del(`blocked:fp:${fp.fingerprint}`) } catch {}
+      logger.info(`[UNBLOCK] Cleared fingerprint: ${fp.fingerprint.substr(0,8)}...`)
     }
-  } catch (e) {
-    errors.push(`VPN exemption handling failed: ${e.message}`)
-  }
+    await BlockedFingerprint.deleteMany({ associatedIPs: ip })
 
-  // Active sessions ONLY (never historical closed sessions)
-  if (mongoose.connection.readyState === 1) {
+    // Step 4 — Also check if any fingerprints were blocked with this IP as primary
+    const primaryFpBlocks = await BlockedFingerprint.find({ 'associatedIPs.0': ip })
+    for (const fp of primaryFpBlocks) {
+      try { await cache.del(`blocked:fp:${fp.fingerprint}`) } catch {}
+    }
+
+    // Step 5 — Also unblock active sessions in MongoDB if any
     try {
-      const sessResult = await Session.updateMany(
-        { ip, isActive: true },
+      await Session.updateMany(
+        { ip },
         { isBlocked: false, unblockedAt: new Date() }
       )
-      cleared.sessionsUpdated = sessResult.modifiedCount
-    } catch (e) {
-      errors.push(`Session update failed: ${e.message}`)
-    }
-  }
+    } catch {}
 
-  // AuditLog write
-  if (mongoose.connection.readyState === 1) {
+    // Step 6 — Broadcast unblock event to admin dashboard
     try {
-      await AuditLog.create({
-        action: 'UNBLOCK_IP',
-        target: ip,
-        targetType: 'IP',
-        admin: adminUsername,
-        reason: req.body?.reason || 'Unblocked IP by admin',
-        details: { cleared, errors }
-      })
-    } catch (e) {
-      errors.push(`AuditLog write failed: ${e.message}`)
-    }
+      const io = req.app.get('io')
+      if (io) {
+        io.to(`ip:${ip}`).emit('client_unblocked', {
+          type: 'IP',
+          target: ip,
+          timestamp: new Date().toISOString()
+        })
+      }
+    } catch {}
+
+    broadcast('ip_unblocked', {
+      ip,
+      reason,
+      unblocked: true,
+      fingerprintsCleared: relatedFingerprints.length,
+      timestamp: new Date().toISOString()
+    })
+
+    logger.info(`[UNBLOCK] SUCCESS: ${ip} fully unblocked — ${reason}`)
+    res.json({
+      success: true,
+      unblocked: ip,
+      reason,
+      mongoDeleted: deleteResult.deletedCount,
+      fingerprintsCleared: relatedFingerprints.length
+    })
+  } catch (err) {
+    logger.error(`[UNBLOCK ERROR] ${err.message}`)
+    res.status(500).json({ error: err.message, success: false })
   }
-
-  // Targeted socket emission to room ip:${ip} and admin broadcast
-  try {
-    const io = req.app.get('io')
-    if (io) {
-      io.to(`ip:${ip}`).emit('client_unblocked', {
-        type: 'IP',
-        target: ip,
-        timestamp: new Date().toISOString()
-      })
-    }
-    broadcast('ip_unblocked', { ip, admin: adminUsername, timestamp: new Date().toISOString() })
-  } catch (e) {
-    errors.push(`Socket emit failed: ${e.message}`)
-  }
-
-  const success = errors.length === 0
-  const notice = (!existingBlock && !cleared.ip) ? 'IP was not blocked in database (idempotent no-op)' : undefined
-
-  logger.info(`[UNBLOCK_IP] IP ${ip} unblocked by ${adminUsername} (success: ${success})`)
-  res.status(success ? 200 : 207).json({
-    success,
-    notice,
-    cleared,
-    errors
-  })
 })
+
 
 // POST /api/blocklist/fingerprint — block a fingerprint (Admin only)
 router.post('/fingerprint', requireAdmin, async (req, res) => {
@@ -608,6 +568,10 @@ router.get('/check-status', checkStatusLimiter, async (req, res) => {
   try {
     const location = detectLocation(req)
     const clientIP = location.ip || req.ip || req.connection?.remoteAddress || '127.0.0.1'
+    const candidateIPs = [clientIP]
+    const rawReqIP = req.ip?.replace('::ffff:', '').trim()
+    if (rawReqIP && !candidateIPs.includes(rawReqIP)) candidateIPs.push(rawReqIP)
+
     const submittedFP = req.query.fingerprint
 
     let validFP = null
@@ -615,7 +579,7 @@ router.get('/check-status', checkStatusLimiter, async (req, res) => {
     if (submittedFP && typeof submittedFP === 'string' && mongoose.connection.readyState === 1) {
       try {
         const activeSession = await Session.findOne({
-          ip: clientIP,
+          ip: { $in: candidateIPs },
           $or: [
             { fingerprintHash: submittedFP },
             { 'fingerprint.hash': submittedFP }
@@ -628,12 +592,14 @@ router.get('/check-status', checkStatusLimiter, async (req, res) => {
     }
 
     // Check IP block (cache first, then DB)
-    const cachedIP = await cache.get(`blocked:${clientIP}`)
-    if (cachedIP?.blocked) {
-      return res.json({ blocked: true })
+    for (const tip of candidateIPs) {
+      const cachedIP = await cache.get(`blocked:${tip}`)
+      if (cachedIP?.blocked) {
+        return res.json({ blocked: true })
+      }
     }
     if (mongoose.connection.readyState === 1) {
-      const dbBlocked = await BlockedIP.findOne({ ip: clientIP })
+      const dbBlocked = await BlockedIP.findOne({ ip: { $in: candidateIPs } })
       if (dbBlocked && (!dbBlocked.expiresAt || new Date() < dbBlocked.expiresAt)) {
         return res.json({ blocked: true })
       }

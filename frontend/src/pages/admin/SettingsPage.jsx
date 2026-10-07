@@ -1,13 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { Settings, Save, Volume2, Database } from 'lucide-react';
 import { alertEngine } from '../../audio/alertEngine';
+import { BACKEND } from '../../utils/backendUrl';
 
 const StorageInfoSection = ({ backendOnline }) => {
   const [dbStats, setDbStats] = useState(null);
 
   useEffect(() => {
     if (backendOnline !== false) {
-      fetch('http://localhost:3001/api/analytics/overview')
+      fetch(`${BACKEND}/api/analytics/overview`)
         .then(r => r.json())
         .then(d => setDbStats(d))
         .catch(() => {});

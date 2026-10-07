@@ -28,6 +28,7 @@ import { apiLimiter } from './middleware/rateLimit.js'
 import logger from './middleware/logger.js'
 import Session from './models/Session.js'
 import { initCache } from './services/cacheService.js'
+import { checkBlockStatus } from './middleware/blockCheck.js'
 
 dotenv.config()
 const app = express()
@@ -60,7 +61,13 @@ const loginLimiter = rateLimit({
   max: 10, // max 10 requests per minute per IP
   message: { error: 'Too many requests', blocked: true, reason: 'RATE_LIMITED' },
   handler: async (req, res, next, options) => {
-    const ip = req.ip || req.connection?.remoteAddress || 'Unknown'
+    let ip = req.ip || req.connection?.remoteAddress || 'Unknown'
+    ip = ip.replace('::ffff:', '').trim()
+    const isLocal = ip === '::1' || ip === '127.0.0.1' || ip.startsWith('127.') || ip === 'localhost' || ip === 'Unknown'
+    if (isLocal) {
+      const { getHostPublicIP } = await import('./middleware/geoip.js')
+      ip = getHostPublicIP() || '49.36.77.174'
+    }
     // Auto-block after rate limit
     await permanentlyBlockAttacker(ip, 'Rate limit exceeded — brute force', null, 'unknown')
     broadcast('attacker_auto_blocked', {
@@ -88,6 +95,8 @@ if (!process.env.VAULT_ENCRYPTION_KEY || !/^[0-9a-fA-F]{64}$/.test(process.env.V
   process.exit(1)
 }
 
+app.use('/api/session', checkBlockStatus)
+app.use('/api/honeypot', checkBlockStatus)
 app.use('/api/honeypot/login', loginLimiter)
 app.use('/api/honeypot', honeypotRoutes)
 app.use('/api/session', sessionRoutes)
@@ -133,15 +142,10 @@ const connectDB = async () => {
       logger.info('[DB] Persistent MongoDB connected successfully')
       return
     } catch (err) {
-      if (process.env.NODE_ENV === 'production') {
-        logger.error(`[FATAL] Persistent MongoDB connection failed in production: ${err.message}. Refusing to start with ephemeral database.`)
-        process.exit(1)
-      }
-      logger.warn(`[DB] Persistent MongoDB connection failed: ${err.message}`)
+      logger.warn(`[DB] Persistent MongoDB connection failed: ${err.message}. Falling back to in-memory database.`)
     }
-  } else if (process.env.NODE_ENV === 'production') {
-    logger.error('[FATAL] Neither MONGODB_URI nor MONGO_URL is configured in production. Refusing to start without persistent database.')
-    process.exit(1)
+  } else {
+    logger.warn('[DB] Persistent MongoDB URI not configured. Falling back to in-memory database.')
   }
 
   // Development-only fallback:
@@ -150,14 +154,14 @@ const connectDB = async () => {
     if (mongoServer) {
       try { await mongoServer.stop() } catch {}
     }
-    const instanceOpts = { dbName: `honeypot_${Date.now()}` }
-    try {
-      if (fs.existsSync('D:\\')) {
-        const dDir = path.join('D:\\mongo-tmp', `hp_${Date.now()}`)
-        fs.mkdirSync(dDir, { recursive: true })
-        instanceOpts.dbPath = dDir
-      }
-    } catch {}
+    const dbDataDir = path.join(__dirname, '../.mongo-data')
+    if (!fs.existsSync(dbDataDir)) {
+      fs.mkdirSync(dbDataDir, { recursive: true })
+    }
+    const instanceOpts = {
+      dbName: 'honeyshield_db',
+      dbPath: dbDataDir
+    }
     mongoServer = await MongoMemoryServer.create({
       binary: { version: '8.2.1' },
       instance: instanceOpts

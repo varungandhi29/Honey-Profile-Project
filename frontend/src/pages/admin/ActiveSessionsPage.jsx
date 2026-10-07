@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Download, Ban, Eye, Crosshair, FolderOpen } from 'lucide-react';
 import { LineChart, Line, ResponsiveContainer, YAxis } from 'recharts';
 import EvidenceModal from '../../components/EvidenceModal';
+import { BACKEND } from '../../utils/backendUrl';
 
 export default function ActiveSessionsPage({ data, settings, engine, onBlockIP, backendOnline }) {
   const [selectedSessionId, setSelectedSessionId] = useState(null);
@@ -25,7 +26,7 @@ export default function ActiveSessionsPage({ data, settings, engine, onBlockIP, 
     // Call backend to mark old sessions inactive
     if (backendOnline !== false) {
       try {
-        await fetch('http://localhost:3001/api/session/clear-inactive', { method: 'POST' });
+        await fetch(`${BACKEND}/api/session/clear-inactive`, { method: 'POST' });
       } catch {}
     }
   };

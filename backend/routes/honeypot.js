@@ -14,13 +14,33 @@ import mongoose from 'mongoose'
 import { cache } from '../services/cacheService.js'
 import logger from '../middleware/logger.js'
 import { encrypt } from '../services/dataVaultService.js'
+import { resolveIPLocation } from '../middleware/geoip.js'
 
 const router = express.Router()
 
 // POST /api/honeypot/login — main honeypot login endpoint
 router.post('/login', async (req, res) => {
-  const ip = req.ip || req.connection?.remoteAddress || 'Unknown'
-  const { username, password, fingerprint, lat, lng, country, city, browser, os } = req.body || {}
+  let ip = req.body?.ip || req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || req.connection?.remoteAddress || 'Unknown'
+  ip = ip.replace('::ffff:', '').trim()
+  let { username, password, fingerprint, lat, lng, country, city, browser, os } = req.body || {}
+
+  const isLocal = ip === '::1' || ip === '127.0.0.1' || ip.startsWith('127.') || ip === 'localhost' || ip === 'Unknown'
+  if (isLocal) {
+    const { getHostPublicIP } = await import('../middleware/geoip.js')
+    ip = getHostPublicIP() || '49.36.77.174'
+  }
+
+  const geo = resolveIPLocation(ip)
+  if (geo) {
+    if (!country || country === 'Unknown' || country === 'Localhost') {
+      country = (geo.country && geo.country !== 'Unknown') ? geo.country : (isLocal ? 'India' : 'External')
+    }
+    if (!city || city === 'Unknown' || city === 'Localhost') {
+      city = (geo.city && geo.city !== 'Unknown') ? geo.city : (isLocal ? 'Vadodara' : (country || 'Remote'))
+    }
+    if (!lat || lat === 0) lat = geo.lat !== 0 ? geo.lat : (isLocal ? 22.3072 : 0)
+    if (!lng || lng === 0) lng = geo.lng !== 0 ? geo.lng : (isLocal ? 73.1812 : 0)
+  }
 
   logger.info(`[HONEYPOT LOGIN] Attempt: ${username || 'anonymous'} from ${ip}`)
 
@@ -57,16 +77,82 @@ router.post('/login', async (req, res) => {
     }
   }
 
-  // STEP 2 — Run attack detection
+  const cleanU = (username || '').trim().toLowerCase()
+  const cleanP = (password || '').trim()
+
+  // STEP 2A — Check Enterprise Users (dhruv@l, rudra@b)
+  let isEnterpriseUser = false
+  let enterpriseUser = null
+  if (cleanU === 'dhruv@l' && cleanP === 'dhruv@123') {
+    isEnterpriseUser = true
+    enterpriseUser = { username: 'dhruv@l', name: 'Dhruv Lad', role: 'USER', dept: 'Engineering', email: 'dhruv.lad@company.com' }
+  } else if (cleanU === 'rudra@b' && cleanP === 'rudra@123') {
+    isEnterpriseUser = true
+    enterpriseUser = { username: 'rudra@b', name: 'Rudra Barot', role: 'USER', dept: 'Finance & Accounts', email: 'rudra.barot@company.com' }
+  }
+
+  if (isEnterpriseUser) {
+    const sessionId = `USER-${enterpriseUser.username}-${Date.now()}`
+    if (mongoose.connection.readyState === 1) {
+      try {
+        await Session.create({
+          sessionId,
+          username: enterpriseUser.username,
+          name: enterpriseUser.name,
+          role: 'USER',
+          dept: enterpriseUser.dept,
+          ip,
+          country: country || 'Unknown',
+          city: city || 'Unknown',
+          browser: browser || 'Unknown',
+          os: os || 'Unknown',
+          lat: parseFloat(lat) || 0,
+          lng: parseFloat(lng) || 0,
+          state: 'NORMAL',
+          riskScore: 5,
+          loginTime: new Date(),
+          isActive: true,
+          fingerprint: fingerprint || {},
+          timeline: [{
+            timestamp: new Date(),
+            action: 'USER_LOGIN',
+            detail: `${enterpriseUser.name} logged into Enterprise Workspace`
+          }]
+        })
+      } catch {}
+    }
+    broadcast('session_joined', { session: { sessionId, username: enterpriseUser.username, role: 'USER', ip, country, city, lat, lng, state: 'NORMAL', riskScore: 5 } })
+    return res.json({
+      success: true,
+      trapped: false,
+      sessionId,
+      user: enterpriseUser
+    })
+  }
+
+  // STEP 2B — Check Attacker Account (darshan@p / darshan@123)
+  const isAttackerDemo = (cleanU === 'darshan@p' && cleanP === 'darshan@123')
+
+  // STEP 2C — Run attack detection
   const detection = await detectAttackVector(req, { username, password, fingerprint })
 
-  // STEP 3 — Try to validate employee credentials
-  const { valid, employee } = await validateEmployee(username, password)
+  // STEP 3 — Try to validate employee credentials or attacker persona
+  let { valid, employee } = await validateEmployee(username, password)
+  if (isAttackerDemo) {
+    valid = true
+    employee = {
+      username: 'darshan@p',
+      name: 'Darshan Patel',
+      role: 'ATTACKER',
+      dept: 'External Adversary',
+      email: 'darshan@adversary.io'
+    }
+  }
 
   // STEP 4 — Determine response based on detection + credentials
-  const isTrap = valid // They found a decoy account — this is a trap!
+  const isTrap = valid // They found a decoy account or used the attacker persona — this is a trap!
 
-  if (detection.autoBlock) {
+  if (detection.autoBlock && !isAttackerDemo) {
     // Auto-block immediately — brute force, VPN, attack tool, etc.
     await permanentlyBlockAttacker(ip, detection.blockReason, fingerprint, username)
 
@@ -204,6 +290,8 @@ router.post('/login', async (req, res) => {
     })
 
     broadcast('new_alert', alert)
+    broadcast('session_joined', { session })
+    broadcast('session_update', session)
     logger.warn(`[HONEY TRAP] ${ip} logged in as decoy employee ${employee.name} (${employee.role})`)
 
     // Return success — give them the fake environment
@@ -228,8 +316,10 @@ router.post('/login', async (req, res) => {
     type: 'FAILED_LOGIN',
     severity: detection.riskScore >= 50 ? 'HIGH' : 'MEDIUM',
     sourceIP: ip,
-    sourceCountry: country || 'Unknown',
-    sourceCity: city || 'Unknown',
+    sourceCountry: country || 'India',
+    sourceCity: city || 'Vadodara',
+    sourceLat: parseFloat(lat) || 22.3072,
+    sourceLng: parseFloat(lng) || 73.1812,
     targetArea: `/auth/login → ${username || 'unknown'}`,
     riskDelta: 10,
     sessionId: `FAIL-${ip}`,

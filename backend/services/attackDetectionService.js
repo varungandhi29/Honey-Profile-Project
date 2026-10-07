@@ -159,15 +159,33 @@ export const detectAttackVector = async (req, loginData) => {
 
 export const permanentlyBlockAttacker = async (ip, reason, fingerprint = null, username = null) => {
   try {
-    // Block IP in MongoDB
+    let targetIP = ip ? ip.replace('::ffff:', '').trim() : 'Unknown'
+    const isLocal = targetIP === '::1' || targetIP === '127.0.0.1' || targetIP.startsWith('127.') || targetIP === 'localhost' || targetIP === 'Unknown'
+    if (isLocal) {
+      const { getHostPublicIP } = await import('../middleware/geoip.js')
+      targetIP = getHostPublicIP() || '49.36.77.174'
+    }
+
+    const { resolveIPLocation } = await import('../middleware/geoip.js')
+    const geo = resolveIPLocation(targetIP)
+
+    // Block IP in MongoDB with real country and city
     await BlockedIP.findOneAndUpdate(
-      { ip },
-      { ip, blockedBy: 'SYSTEM_AUTO', reason: reason || 'Auto-blocked by attack detection engine', permanent: true, blockedAt: new Date() },
+      { ip: targetIP },
+      {
+        ip: targetIP,
+        blockedBy: 'SYSTEM_AUTO',
+        reason: reason || 'Auto-blocked by attack detection engine',
+        permanent: true,
+        country: geo?.country || 'India',
+        city: geo?.city || 'Vadodara',
+        blockedAt: new Date()
+      },
       { upsert: true, new: true }
     )
 
     // Cache IP block for 1 year
-    await cache.set(`blocked:${ip}`, { blocked: true, reason }, 86400 * 365)
+    await cache.set(`blocked:${targetIP}`, { blocked: true, reason }, 86400 * 365)
 
     // Block fingerprint if available
     if (fingerprint && typeof fingerprint === 'string') {

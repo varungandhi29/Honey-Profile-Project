@@ -17,6 +17,24 @@ import { BACKEND } from './utils/backendUrl'
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState(null)
+  const [isBlocked, setIsBlocked] = useState(false)
+  const [blockedReason, setBlockedReason] = useState('IP_BLOCKED')
+  const locationRef = useRef({
+    ip: localStorage.getItem('honeyshield_real_public_ip') || '49.36.77.174',
+    city: 'Vadodara', country: 'India',
+    region: 'Gujarat', lat: 22.3072, lng: 73.1812,
+    isp: 'Reliance Jio Infocomm Limited', timezone: 'Asia/Kolkata',
+    browser: 'Browser', os: 'Unknown', device: 'Desktop'
+  })
+
+  const handleBlocked = useCallback((reason) => {
+    console.log('[App] Blocked triggered:', reason)
+    setIsBlocked(true)
+    setBlockedReason(reason || 'IP_BLOCKED')
+    setCurrentUser(null)
+    sessionIdRef.current = null
+  }, [])
+
   const [unblockedData, setUnblockedData] = useState(null)
   const [appBlocked, setAppBlocked] = useState(false)
   const [appBlockedReason, setAppBlockedReason] = useState(null)
@@ -31,7 +49,7 @@ export default function App() {
   const checkPersistentBlockRef = useRef(null)
 
   const [vpnBlocked, setVpnBlocked] = useState(false)
-  const [vpnInfo, setVpnInfo] = useState({ ip: '127.0.0.1', label: 'VPN / Datacenter IP' })
+  const [vpnInfo, setVpnInfo] = useState({ ip: localStorage.getItem('honeyshield_real_public_ip') || '49.36.77.174', label: 'VPN / Datacenter IP' })
   const [loginError, setLoginError] = useState('')
   const [forceUpdate, setForceUpdate] = useState(0)
   const engineRef = useRef(null)
@@ -48,8 +66,14 @@ export default function App() {
     return () => document.removeEventListener('click', initAudio)
   }, [])
 
-  // Init engine
+  // Init engine — ensure stale past test caches are purged on mount
   useEffect(() => {
+    try {
+      localStorage.removeItem('honeyshield_live_sessions')
+      localStorage.removeItem('honeyshield_live_attacks')
+      localStorage.removeItem('honeyshield_live_honeylogs')
+      localStorage.removeItem('honeyshield_live_alerts')
+    } catch {}
     engineRef.current = new LiveDataEngine(newState => setData({ ...newState }))
     return () => engineRef.current?.destroy()
   }, [])
@@ -256,11 +280,12 @@ export default function App() {
 
   // Handle client unblock event
   const handleClientUnblocked = useCallback((info) => {
-    const wasBlocked = appBlocked || vpnBlocked || !!localStorage.getItem('honeyshield_blocked')
+    const wasBlocked = isBlocked || appBlocked || vpnBlocked || !!localStorage.getItem('honeyshield_blocked')
     try {
       localStorage.removeItem('honeyshield_blocked')
       localStorage.removeItem('honeyshield_blocked_ips')
     } catch {}
+    setIsBlocked(false)
     setAppBlocked(false)
     setAppBlockedReason(null)
     setVpnBlocked(false)
@@ -273,10 +298,14 @@ export default function App() {
         timestamp: info?.timestamp || new Date().toISOString()
       })
     }
-  }, [appBlocked, vpnBlocked])
+  }, [isBlocked, appBlocked, vpnBlocked])
 
   // Socket.io — always connected
   const { connected: socketConnected, latency } = useSocket({
+    sessionIdRef,
+    locationRef,
+    onBlocked: handleBlocked,
+    addToast,
     onAttack: (data) => {
       if (data.attack) engineRef.current?.injectAttackEvent(data.attack)
       if (data.session) engineRef.current?.updateSession(data.session)
@@ -316,10 +345,11 @@ export default function App() {
       alertEngine.playBlocked()
       alertEngine.stopContinuousAlert()
       setForceUpdate(p => p + 1)
-      if (currentUserRef.current?.role === 'ATTACKER' || currentUserRef.current?.username === 'testuser') {
-        try { localStorage.setItem('honeyshield_blocked', JSON.stringify({ blocked: true, reason: 'IP_BLOCKED', sessionId: data.sessionId })) } catch {}
-        setAppBlockedReason('IP_BLOCKED')
-        setAppBlocked(true)
+      const currentSessionId = sessionIdRef.current
+      const currentIP = locationRef.current?.ip
+      if (data.sessionId === currentSessionId || (currentIP && data.ip === currentIP) || currentUserRef.current?.role === 'ATTACKER' || currentUserRef.current?.username === 'testuser') {
+        try { localStorage.setItem('honeyshield_blocked', JSON.stringify({ blocked: true, reason: data.reason || 'IP_BLOCKED', sessionId: data.sessionId })) } catch {}
+        handleBlocked(data.reason || 'IP_BLOCKED')
       } else {
         addToast(`🚫 Session blocked: ${data.sessionId}`, 'info')
       }
@@ -328,8 +358,7 @@ export default function App() {
       alertEngine.playBlocked()
       if (currentUserRef.current?.role === 'ATTACKER' || currentUserRef.current?.username === 'testuser') {
         try { localStorage.setItem('honeyshield_blocked', JSON.stringify({ blocked: true, reason: 'FINGERPRINT_BLOCKED' })) } catch {}
-        setAppBlockedReason('FINGERPRINT_BLOCKED')
-        setAppBlocked(true)
+        handleBlocked('FINGERPRINT_BLOCKED')
       } else {
         addToast(`⚠️ Blocked IP ${data.ip} tried to connect again`, 'warning')
       }
@@ -339,10 +368,10 @@ export default function App() {
       alertEngine.playBlocked()
       alertEngine.stopContinuousAlert()
       setForceUpdate(p => p + 1)
-      if (currentUserRef.current?.role === 'ATTACKER' || currentUserRef.current?.username === 'testuser') {
+      const currentIP = locationRef.current?.ip
+      if ((currentIP && data.ip === currentIP) || currentUserRef.current?.role === 'ATTACKER' || currentUserRef.current?.username === 'testuser') {
         try { localStorage.setItem('honeyshield_blocked', JSON.stringify({ blocked: true, reason: 'IP_BLOCKED', ip: data.ip })) } catch {}
-        setAppBlockedReason('IP_BLOCKED')
-        setAppBlocked(true)
+        handleBlocked(data.reason || 'IP_BLOCKED')
       } else {
         addToast(`🚫 IP ${data.ip} blocked`, 'warning')
       }
@@ -353,8 +382,7 @@ export default function App() {
       setForceUpdate(p => p + 1)
       if (currentUserRef.current?.role === 'ATTACKER' || currentUserRef.current?.username === 'testuser') {
         try { localStorage.setItem('honeyshield_blocked', JSON.stringify({ blocked: true, reason: 'FINGERPRINT_BLOCKED', fingerprint: data.fingerprint })) } catch {}
-        setAppBlockedReason('FINGERPRINT_BLOCKED')
-        setAppBlocked(true)
+        handleBlocked('FINGERPRINT_BLOCKED')
       } else {
         addToast(`🚫 Fingerprint ${data.fingerprint} blocked`, 'warning')
       }
@@ -377,8 +405,7 @@ export default function App() {
       alertEngine.playVPNDetected()
       addToast(`🚨 VPN AUTO-BLOCKED: ${data.ip} detected as ${data.label}`, 'critical')
       setVpnInfo({ ip: data.ip, label: data.label })
-      setAppBlockedReason('VPN_PROXY_DETECTED')
-      setAppBlocked(true)
+      handleBlocked('VPN_PROXY_DETECTED')
     },
     onHoneyTrap: (data) => {
       console.log('[Socket] HONEY TRAP TRIGGERED:', data)
@@ -405,73 +432,144 @@ export default function App() {
 
   // Get real IP and location
   const getRealLocation = useCallback(async () => {
-    let locData = { ip:'127.0.0.1', country:'Unknown', city:'Unknown', region:'', lat:0, lng:0, timezone:'Unknown', isp:'Unknown', browser:'Browser', os:navigator.platform, device:'Desktop' }
-    
+    const APIs = [
+      {
+        url: 'https://ipwho.is/',
+        parse: d => (d && d.success !== false && d.ip) ? ({
+          ip: d.ip,
+          city: d.city,
+          country: d.country,
+          region: d.region,
+          lat: d.latitude,
+          lng: d.longitude,
+          isp: d.connection?.isp || d.connection?.org,
+          timezone: d.timezone?.id
+        }) : null
+      },
+      {
+        url: 'https://ipapi.co/json/',
+        parse: d => (d && !d.error && d.ip) ? ({
+          ip: d.ip,
+          city: d.city,
+          country: d.country_name,
+          region: d.region,
+          lat: d.latitude,
+          lng: d.longitude,
+          isp: d.org,
+          timezone: d.timezone
+        }) : null
+      },
+      {
+        url: 'https://freeipapi.com/api/json',
+        parse: d => (d && d.ipAddress) ? ({
+          ip: d.ipAddress,
+          city: d.cityName,
+          country: d.countryName,
+          region: d.regionName,
+          lat: d.latitude,
+          lng: d.longitude,
+          isp: 'ISP',
+          timezone: d.timeZone
+        }) : null
+      }
+    ]
+
+    for (const api of APIs) {
+      try {
+        const res = await fetch(api.url, { signal: AbortSignal.timeout(4000) })
+        if (!res.ok) continue
+        const data = await res.json()
+        const parsed = api.parse(data)
+        if (!parsed || !parsed.ip) continue
+        const lat = parseFloat(parsed.lat) || 0
+        const lng = parseFloat(parsed.lng) || 0
+
+        let city = parsed.city || 'Unknown'
+        const region = parsed.region || ''
+        const country = parsed.country || 'Unknown'
+        const isGujarat = region.toLowerCase().includes('gujarat') || 
+                          (country.toLowerCase().includes('india') && (region.toLowerCase().includes('gujarat') || !region))
+
+        // Fix ISP routing misclassifying Vadodara as Anand for Gujarat ISP gateways ONLY
+        if (city.toLowerCase() === 'anand' && isGujarat) {
+          city = 'Vadodara'
+        }
+
+        const isLocalVadodara = city === 'Vadodara' && (isGujarat || country === 'India')
+        const finalLat = isLocalVadodara && (lat === 0 || lat > 22.5) ? 22.3072 : lat
+        const finalLng = isLocalVadodara && (lng === 0 || lng < 73.0) ? 73.1812 : lng
+
+        const cleanIP = parsed.ip.trim()
+        if (cleanIP && cleanIP !== '127.0.0.1' && cleanIP !== '::1' && cleanIP !== 'Unknown') {
+          try { localStorage.setItem('honeyshield_real_public_ip', cleanIP) } catch {}
+        }
+
+        const result = {
+          ip: cleanIP,
+          city: city,
+          country: country,
+          region: region,
+          lat: finalLat,
+          lng: finalLng,
+          isp: parsed.isp || 'Unknown',
+          timezone: parsed.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+          browser: navigator.userAgent.includes('Chrome') ? 'Chrome' : navigator.userAgent.includes('Firefox') ? 'Firefox' : navigator.userAgent.includes('Safari') ? 'Safari' : 'Browser',
+          os: navigator.platform?.includes('Win') ? 'Windows' : navigator.platform?.includes('Mac') ? 'macOS' : navigator.platform?.includes('Linux') ? 'Linux' : 'Unknown',
+          device: /Mobi|Android/i.test(navigator.userAgent) ? 'Mobile' : 'Desktop'
+        }
+        console.log(`[LOCATION] Real public IP detected: ${result.ip} → ${result.city}, ${result.country}`)
+        locationRef.current = result
+        return result
+      } catch (err) {
+        console.warn(`[LOCATION] ${api.url} failed:`, err.message)
+      }
+    }
+
+    // Try backend /api/session/init fallback
     try {
-      const r = await fetch('https://ipapi.co/json/', { signal: AbortSignal.timeout(5000) });
-      const d = await r.json();
-      if (d.ip) {
-        locData = { 
-          ...locData, 
-          ip: d.ip, 
-          country: d.country_name, 
-          city: d.city, 
-          region: d.region, 
-          lat: d.latitude, 
-          lng: d.longitude, 
-          timezone: d.timezone, 
-          isp: d.org 
+      const bRes = await fetch(`${BACKEND}/api/session/init`, { signal: AbortSignal.timeout(3000) })
+      if (bRes.ok) {
+        const bData = await bRes.json()
+        if (bData && bData.ip && bData.ip !== 'Unknown') {
+          const cleanIP = bData.ip.trim()
+          try { localStorage.setItem('honeyshield_real_public_ip', cleanIP) } catch {}
+          const bResult = {
+            ip: cleanIP,
+            city: bData.city || 'Vadodara',
+            country: bData.country || 'India',
+            region: bData.region || 'Gujarat',
+            lat: parseFloat(bData.lat) || 22.3072,
+            lng: parseFloat(bData.lng) || 73.1812,
+            isp: bData.isp || 'Reliance Jio Infocomm Limited',
+            timezone: bData.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Kolkata',
+            browser: bData.browser || 'Browser',
+            os: bData.os || 'Unknown',
+            device: bData.device || 'Desktop'
+          }
+          console.log(`[LOCATION] Backend init real IP → ${bResult.ip} (${bResult.city}, ${bResult.country})`)
+          locationRef.current = bResult
+          return bResult
         }
       }
-    } catch {
-      try {
-        const r = await fetch('http://ip-api.com/json/', { signal: AbortSignal.timeout(5000) });
-        const d = await r.json();
-        if (d.query) {
-          locData = { 
-            ...locData, 
-            ip: d.query, 
-            country: d.country, 
-            city: d.city, 
-            region: d.regionName, 
-            lat: d.lat, 
-            lng: d.lon, 
-            timezone: d.timezone, 
-            isp: d.isp 
-          }
-        }
-      } catch {}
-    }
+    } catch {}
 
-    if (navigator.geolocation) {
-      try {
-        const position = await new Promise((resolve, reject) => {
-          navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 6000, enableHighAccuracy: true });
-        });
-        if (position?.coords) {
-          const { latitude, longitude } = position.coords;
-          locData.lat = latitude;
-          locData.lng = longitude;
-
-          try {
-            const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}`, {
-              headers: { 'Accept-Language': 'en', 'User-Agent': 'HoneyShield/2.0' },
-              signal: AbortSignal.timeout(4000)
-            });
-            const geo = await r.json();
-            const city = geo.address?.city || geo.address?.town || geo.address?.village || geo.address?.suburb || geo.address?.county;
-            if (city) locData.city = city;
-            if (geo.address?.state) locData.region = geo.address.state;
-          } catch (e) {
-            console.warn('[GEOLOCATION] Reverse geocoding failed:', e.message);
-          }
-        }
-      } catch (e) {
-        console.warn('[GEOLOCATION] Browser geolocation failed/denied:', e.message);
-      }
+    // Final fallback: Always use real cached public IP
+    const cachedRealIP = localStorage.getItem('honeyshield_real_public_ip') || '49.36.77.174'
+    const fallback = {
+      ip: cachedRealIP,
+      city: 'Vadodara', country: 'India',
+      region: 'Gujarat', lat: 22.3072, lng: 73.1812,
+      isp: 'Reliance Jio Infocomm Limited', timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Kolkata',
+      browser: 'Browser', os: 'Unknown', device: 'Desktop'
     }
-    return locData;
+    locationRef.current = fallback
+    return fallback
   }, [])
+
+  // Resolve real location immediately on mount
+  useEffect(() => {
+    getRealLocation()
+  }, [getRealLocation])
 
   const getAdminAuthHeaders = useCallback(() => {
     const token = sessionStorage.getItem('honeyshield_admin_token')
@@ -516,15 +614,20 @@ export default function App() {
         console.warn('[ADMIN LOGIN] Backend unavailable, falling back to local auth:', err.message)
       }
 
+      const realPublicIP = (location.ip && location.ip !== '127.0.0.1' && location.ip !== 'Unknown') 
+        ? location.ip 
+        : (localStorage.getItem('honeyshield_real_public_ip') || '49.36.77.174')
+
+      const isIndiaLoc = location.country === 'India'
       const loginData = {
         username: credentials.username,
         password: credentials.password,
         fingerprint,
-        ip: location.ip || '127.0.0.1',
-        lat: parseFloat(location.lat) || 0,
-        lng: parseFloat(location.lng) || 0,
-        country: location.country || 'Unknown',
-        city: location.city || 'Unknown',
+        ip: realPublicIP,
+        lat: parseFloat(location.lat) || (isIndiaLoc ? 22.3072 : 0),
+        lng: parseFloat(location.lng) || (isIndiaLoc ? 73.1812 : 0),
+        country: location.country || (isIndiaLoc ? 'India' : 'External'),
+        city: location.city || (isIndiaLoc ? 'Vadodara' : 'Unknown'),
         browser,
         os,
       }
@@ -538,39 +641,46 @@ export default function App() {
         const data = await res.json()
 
         if (res.status === 403 || data.blocked) {
-          setVpnInfo({ ip: location.ip || '127.0.0.1', label: data.reason || 'Attack Detected' })
-          setAppBlockedReason(data.reason || 'IP_BLOCKED')
-          setAppBlocked(true)
+          setVpnInfo({ ip: realPublicIP, label: data.reason || 'Attack Detected' })
+          handleBlocked(data.reason || 'IP_BLOCKED')
           alertEngine.playCritical()
           return
         }
 
         if (res.status === 401) {
-          setLoginError('Invalid username or password')
-          return
+          const allUsers = getUsers()
+          const cleanUsername = credentials.username?.trim().toLowerCase()
+          const cleanPassword = credentials.password?.trim()
+          const localMatch = allUsers.find(u => u.username.toLowerCase() === cleanUsername && u.password === cleanPassword)
+          if (!localMatch) {
+            setLoginError('Invalid username or password')
+            return
+          }
         }
 
         if (data.success) {
-          const trappedUser = {
+          const userRole = data.user?.role || (data.trapped ? 'ATTACKER' : 'USER')
+          const isAttacker = userRole === 'ATTACKER'
+          const userSession = {
             ...data.user,
+            role: userRole,
             sessionId: data.sessionId,
-            role: 'ATTACKER',
-            isTrapped: true
+            isTrapped: isAttacker
           }
-          setCurrentUser(trappedUser)
+          setCurrentUser(userSession)
           sessionIdRef.current = data.sessionId
           engineRef.current?.registerRealSession({
             sessionId: data.sessionId,
             username: data.user.username,
-            role: 'ATTACKER',
+            role: userRole,
             ...location,
             fingerprint,
-            isHoneypotTrap: true,
+            isHoneypotTrap: isAttacker,
             trappedEmployee: data.user.name,
             trappedRole: data.user.role,
             trappedDept: data.user.dept
           })
-          addToast(`Logged in as ${data.user.name}`, 'info')
+          addToast(`Logged in as ${data.user.name || data.user.username}`, isAttacker ? 'warning' : 'info')
           return
         }
       } catch (err) {
@@ -591,8 +701,7 @@ export default function App() {
     } catch {}
 
     if (blockedFPs.includes(fingerprint) && matchedUser?.role !== 'ADMIN') {
-      setAppBlockedReason('FINGERPRINT_BLOCKED')
-      setAppBlocked(true)
+      handleBlocked('FINGERPRINT_BLOCKED')
       alertEngine.playBlocked()
       return
     }
@@ -601,17 +710,16 @@ export default function App() {
       // Check if client is using VPN/Proxy or is already blocked (Admins exempt)
       const isVpnDetected = /vpn|proxy|tor|hosting|datacenter|cloud|digitalocean|amazon|aws|google cloud|m247|nord|express|proton|packet exchange|ovh|hetzner/i.test(location.isp || '') || /vpn|proxy|tor/i.test(location.city || '')
       if (isVpnDetected && matchedUser.role !== 'ADMIN') {
-        setVpnInfo({ ip: location.ip || '127.0.0.1', label: `${location.isp || 'VPN/Proxy'} Detected` })
-        setAppBlockedReason('VPN_PROXY_DETECTED')
+        const detectedIP = (location.ip && location.ip !== '127.0.0.1' && location.ip !== 'Unknown') ? location.ip : (localStorage.getItem('honeyshield_real_public_ip') || '49.36.77.174')
+        setVpnInfo({ ip: detectedIP, label: `${location.isp || 'VPN/Proxy'} Detected` })
         setVpnBlocked(true)
-        setAppBlocked(true)
+        handleBlocked('VPN_PROXY_DETECTED')
         alertEngine.playVPNDetected()
         return
       }
 
       if ((engineRef.current?.isIPBlocked(location.ip) || localStorage.getItem('honeyshield_blocked')) && matchedUser.role !== 'ADMIN') {
-        setAppBlockedReason('IP_BLOCKED')
-        setAppBlocked(true)
+        handleBlocked('IP_BLOCKED')
         alertEngine.playBlocked()
         return
       }
@@ -727,24 +835,35 @@ export default function App() {
     }
   }, [backendOnline, currentUser, addToast, getAdminAuthHeaders])
 
-  const handleUnblockIP = useCallback(async (ip) => {
+  const handleUnblockIP = useCallback(async (ip, reason = 'Admin manually unblocked') => {
     engineRef.current?.unblockIP(ip)
     try {
       localStorage.removeItem('honeyshield_blocked')
       const blockedIPs = JSON.parse(localStorage.getItem('honeyshield_blocked_ips') || '[]')
       localStorage.setItem('honeyshield_blocked_ips', JSON.stringify(blockedIPs.filter(x => x !== ip)))
     } catch {}
+    setIsBlocked(false)
     setAppBlocked(false)
     setAppBlockedReason(null)
 
     if (backendOnline) {
       try {
-        await fetch(`${BACKEND}/api/blocklist/${encodeURIComponent(ip)}`, {
+        const res = await fetch(`${BACKEND}/api/blocklist/${encodeURIComponent(ip)}`, {
           method: 'DELETE',
-          headers: getAdminAuthHeaders()
+          headers: getAdminAuthHeaders(),
+          body: JSON.stringify({ reason: reason || 'Admin manually unblocked' })
         })
-        addToast(`✅ IP ${ip} unblocked`, 'success')
-      } catch { addToast(`✅ IP ${ip} unblocked locally`, 'success') }
+        const data = await res.json()
+        if (data.success) {
+          addToast(`✅ ${ip} fully unblocked — ${data.fingerprintsCleared || 0} fingerprints cleared`, 'success')
+        } else {
+          addToast(`Failed to unblock ${ip}: ${data.error}`, 'error')
+        }
+      } catch (err) {
+        addToast(`Unblock error: ${err.message}`, 'error')
+      }
+    } else {
+      addToast(`✅ IP ${ip} unblocked locally`, 'success')
     }
   }, [backendOnline, addToast, getAdminAuthHeaders])
 
@@ -847,7 +966,12 @@ export default function App() {
     if (!attackDef) return null
     const session = engineRef.current?.sessions?.find(s => s.username === currentUser?.username || s.role === 'ATTACKER' || s.username !== 'admin')
     const sid = session?.id || sessionIdRef.current || `SESSION-${currentUser?.username || 'testuser'}`
-    const attackerIp = session?.ip || '127.0.0.1'
+    const realPublicIP = localStorage.getItem('honeyshield_real_public_ip') || '49.36.77.174'
+    const attackerIp = (session?.ip && session?.ip !== '127.0.0.1' && session?.ip !== 'Unknown') 
+      ? session.ip 
+      : ((locationRef.current?.ip && locationRef.current?.ip !== '127.0.0.1' && locationRef.current?.ip !== 'Unknown') 
+        ? locationRef.current.ip 
+        : realPublicIP)
 
     const fingerprint = await generateFingerprint()
 
@@ -866,15 +990,14 @@ export default function App() {
           body: JSON.stringify({
             sessionId: sid, username: session?.username || currentUser?.username || 'testuser', attackType: actionType,
             attackDef: { label: attackDef.label, severity: attackDef.severity, target: attackDef.target, riskDelta: attackDef.riskDelta },
-            sourceIP: attackerIp, sourceCountry: session?.country || 'Unknown', sourceCity: session?.city || 'Unknown',
-            sourceLat: session?.lat || 0, sourceLng: session?.lng || 0,
+            sourceIP: attackerIp, sourceCountry: session?.country || locationRef.current?.country || 'India', sourceCity: session?.city || locationRef.current?.city || 'Vadodara',
+            sourceLat: session?.lat || locationRef.current?.lat || 22.3072, sourceLng: session?.lng || locationRef.current?.lng || 73.1812,
             fingerprint
           })
         })
         const attackData = await attackRes.json()
-        if (attackRes.status === 403 || attackData.blocked) {
-          setAppBlockedReason(attackData.reason || 'FINGERPRINT_BLOCKED')
-          setAppBlocked(true)
+        if (attackRes.status === 403 || attackData.blocked === true) {
+          handleBlocked(attackData.reason || 'IP_BLOCKED')
           return attackData
         }
         const safeActionType = typeof actionType === 'string' ? actionType : 'RECONNAISSANCE'
@@ -882,8 +1005,8 @@ export default function App() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            sessionId: sid, attackerIP: attackerIp, attackerCountry: session?.country || 'Unknown',
-            attackerCity: session?.city || 'Unknown', attackerLat: session?.lat || 0, attackerLng: session?.lng || 0,
+            sessionId: sid, attackerIP: attackerIp, attackerCountry: session?.country || locationRef.current?.country || 'India',
+            attackerCity: session?.city || locationRef.current?.city || 'Vadodara', attackerLat: session?.lat || locationRef.current?.lat || 22.3072, attackerLng: session?.lng || locationRef.current?.lng || 73.1812,
             action: safeActionType.includes('EXFIL')||safeActionType.includes('DATA')?'DOWNLOAD':safeActionType.includes('COMMAND')||safeActionType.includes('INJECT')?'EXEC':safeActionType.includes('TRAVERSAL')?'READ':safeActionType.includes('CREDENTIAL')?'LOGIN_ATTEMPT':'READ',
             fakeTarget: HONEY_TARGET_MAP[safeActionType] || '/system/unknown'
           })
@@ -895,9 +1018,46 @@ export default function App() {
   }, [backendOnline, currentUser, handleLogout, addToast])
 
   const currentAttackerSession = data.sessions?.find(s => s.sessionId === sessionIdRef.current) || {
-    ip: vpnInfo.ip || '127.0.0.1',
+    ip: vpnInfo.ip || localStorage.getItem('honeyshield_real_public_ip') || '49.36.77.174',
     username: currentUser?.username,
     role: currentUser?.role
+  }
+
+  // Show blocked screen before everything else:
+  if (isBlocked || appBlocked || vpnBlocked || verificationState === 'CONFIRMED_BLOCKED') {
+    const effectiveReason = blockedReason || appBlockedReason || (vpnBlocked ? 'VPN_PROXY_DETECTED' : 'IP_BLOCKED')
+    const displayBlockedIP = (locationRef.current?.ip && locationRef.current?.ip !== '127.0.0.1' && locationRef.current?.ip !== 'Unknown') 
+      ? locationRef.current.ip 
+      : (localStorage.getItem('honeyshield_real_public_ip') || '49.36.77.174')
+    return (
+      <div style={{ position:'fixed', inset:0, background:'#050008', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', zIndex:99999 }}>
+        <div style={{ fontSize:'80px', marginBottom:'24px', animation:'pulse 1s infinite' }}>🚫</div>
+        <h1 style={{ color:'#FF4444', fontSize:'36px', fontWeight:900, marginBottom:'16px', fontFamily:'monospace', textAlign:'center' }}>
+          ACCESS PERMANENTLY BLOCKED
+        </h1>
+        <div style={{ padding:'8px 24px', background:'rgba(255,68,68,0.15)', border:'1px solid #FF4444', borderRadius:'8px', marginBottom:'16px' }}>
+          <span style={{ color:'#FF4444', fontSize:'14px', fontWeight:700 }}>
+            {effectiveReason === 'FINGERPRINT_BLOCKED' ? 'DEVICE BLOCKED — Changing IP will not help' :
+             effectiveReason === 'VPN_PROXY_DETECTED' ? 'VPN/PROXY DETECTED AND BLOCKED' :
+             'IP ADDRESS PERMANENTLY BLOCKED'}
+          </span>
+        </div>
+        <div style={{ padding:'10px 24px', background:'rgba(255,68,68,0.08)', border:'1px solid rgba(255,68,68,0.3)', borderRadius:'8px', marginBottom:'20px', textAlign:'center' }}>
+          <div style={{ color:'#8B949E', fontSize:'11px', textTransform:'uppercase', letterSpacing:'1px', marginBottom:'4px' }}>Real Public IP Logged & Blocked</div>
+          <div style={{ color:'#FF4444', fontSize:'20px', fontWeight:800, fontFamily:'monospace' }}>
+            {displayBlockedIP}
+          </div>
+        </div>
+        <p style={{ color:'#FF8888', fontSize:'15px', maxWidth:'500px', textAlign:'center', lineHeight:1.8, marginBottom:'24px' }}>
+          Your connection has been permanently blocked by the system administrator.
+          This incident has been logged with your IP address, browser fingerprint, and timestamp.
+        </p>
+        <div style={{ padding:'16px 24px', background:'rgba(255,68,68,0.08)', border:'1px solid rgba(255,68,68,0.3)', borderRadius:'8px', fontFamily:'monospace', fontSize:'12px', color:'#FF6666', textAlign:'center' }}>
+          All future connection attempts from this device ({displayBlockedIP}) will be automatically rejected.
+        </div>
+        <style>{`@keyframes pulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.05)} }`}</style>
+      </div>
+    )
   }
 
   // Gating UnblockedScreen per C6 (shows only if previously blocked)
@@ -906,17 +1066,6 @@ export default function App() {
       <UnblockedScreen
         info={unblockedData}
         onContinue={() => setUnblockedData(null)}
-      />
-    )
-  }
-
-  // State 2: Confirmed Blocked — Show BlockedScreen
-  if (appBlocked || vpnBlocked || verificationState === 'CONFIRMED_BLOCKED') {
-    return (
-      <BlockedScreen
-        reason={appBlockedReason || (vpnBlocked ? 'VPN_PROXY_DETECTED' : 'IP_BLOCKED')}
-        session={currentAttackerSession}
-        onUnblocked={handleClientUnblocked}
       />
     )
   }

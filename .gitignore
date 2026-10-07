@@ -20,3 +20,5 @@ Thumbs.db
 scratch/
 *.admin-password-once.txt
 backend/.admin-password-once.txt
+.mongo-data/
+/HONEYSHIELD_MOVIE.mp4

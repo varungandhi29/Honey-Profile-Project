@@ -61,6 +61,18 @@ export default function AdminDashboard({ currentUser, onLogout, data, engineRef,
   const [time, setTime] = useState(new Date());
   const [showExport, setShowExport] = useState(false);
   const [forceUpdate, setForceUpdate] = useState(0);
+
+  const handlePurgeAll = async () => {
+    if (!window.confirm('Wipe all past test attacks, test sessions, and honeypot logs? The dashboard will return to a clean live-monitoring state.')) return;
+    try {
+      const { BACKEND } = await import('../utils/backendUrl');
+      await fetch(`${BACKEND}/api/session/clear-all`, { method: 'POST' });
+    } catch {}
+    engineRef?.current?.clearAllData();
+    const { honeyBus } = await import('../utils/honeyBus');
+    honeyBus.publish('CLEAR_ALL');
+    setForceUpdate(p => p + 1);
+  };
   
   const [settings, setSettings] = useState({
     suspiciousThreshold: 36, attackerThreshold: 70,
@@ -230,6 +242,28 @@ export default function AdminDashboard({ currentUser, onLogout, data, engineRef,
                 🔕 Stop Alert
               </button>
             )}
+            <button
+              onClick={handlePurgeAll}
+              title="Reset Threat Grid — wipe all past test attacks, test sessions, and logs"
+              style={{
+                padding: '6px 12px',
+                background: 'rgba(255, 68, 68, 0.1)',
+                color: '#FF7B72',
+                border: '1px solid rgba(255, 68, 68, 0.3)',
+                borderRadius: '6px',
+                fontSize: '11px',
+                fontWeight: 600,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                transition: 'all 0.2s'
+              }}
+              onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255, 68, 68, 0.2)'; e.currentTarget.style.borderColor = '#FF4444'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255, 68, 68, 0.1)'; e.currentTarget.style.borderColor = 'rgba(255, 68, 68, 0.3)'; }}
+            >
+              🧹 Reset Threat Grid
+            </button>
             <span style={{ color: '#8B949E', fontSize: '14px', fontFamily: 'monospace' }}>
               {time.toLocaleTimeString()}
             </span>

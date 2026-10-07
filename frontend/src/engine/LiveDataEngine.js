@@ -7,29 +7,22 @@ class LiveDataEngine {
     this.intervals = []
     this.attackerTimers = []
 
-    // Load persisted state from localStorage
-    let savedBlockedIPs = []
-    let savedBlockLog = []
-    let savedSessions = []
-    let savedAttacks = []
-    let savedHoneyLogs = []
-    let savedAlerts = []
-    try {
-      savedBlockedIPs = JSON.parse(localStorage.getItem('honeyshield_blocked_ips') || '[]')
-      savedBlockLog = JSON.parse(localStorage.getItem('honeyshield_block_log') || '[]')
-      savedSessions = JSON.parse(localStorage.getItem('honeyshield_live_sessions') || '[]')
-      savedAttacks = JSON.parse(localStorage.getItem('honeyshield_live_attacks') || '[]')
-      savedHoneyLogs = JSON.parse(localStorage.getItem('honeyshield_live_honeylogs') || '[]')
-      savedAlerts = JSON.parse(localStorage.getItem('honeyshield_live_alerts') || '[]')
-    } catch {}
-
-    this.blockedIPs = new Set(savedBlockedIPs)
-    this.blockLog = Array.isArray(savedBlockLog) ? savedBlockLog : []
-    this.sessions = Array.isArray(savedSessions) ? savedSessions : []
-    this.attackLog = Array.isArray(savedAttacks) ? savedAttacks : []
-    this.honeyLog = Array.isArray(savedHoneyLogs) ? savedHoneyLogs : []
-    this.alertLog = Array.isArray(savedAlerts) ? savedAlerts : []
+    // Fresh real-time state — NO dummy, past, or cached attacks/attackers on startup
+    this.blockedIPs = new Set()
+    this.blockLog = []
+    this.sessions = []
+    this.attackLog = []
+    this.honeyLog = []
+    this.alertLog = []
     this.autoResponseLog = []
+
+    // Purge old test data from localStorage so old tests never pollute the live screen
+    try {
+      localStorage.removeItem('honeyshield_live_sessions')
+      localStorage.removeItem('honeyshield_live_attacks')
+      localStorage.removeItem('honeyshield_live_honeylogs')
+      localStorage.removeItem('honeyshield_live_alerts')
+    } catch {}
 
     // Subscribe to cross-tab / cross-window real-time events via HoneyBus
     this.unsubscribeHoneyBus = honeyBus.subscribe((event) => {
@@ -44,8 +37,29 @@ class LiveDataEngine {
         if (session) this.updateSession(session)
       } else if (event.type === 'BLOCK_IP' && event.payload?.ip) {
         this.blockIP(event.payload.ip, event.payload.blockedBy, event.payload.reason)
+      } else if (event.type === 'CLEAR_ALL') {
+        this.clearAllData()
       }
     })
+  }
+
+  clearAllData() {
+    this.sessions = []
+    this.attackLog = []
+    this.honeyLog = []
+    this.alertLog = []
+    this.autoResponseLog = []
+    this.blockedIPs.clear()
+    this.blockLog = []
+    try {
+      localStorage.removeItem('honeyshield_live_sessions')
+      localStorage.removeItem('honeyshield_live_attacks')
+      localStorage.removeItem('honeyshield_live_honeylogs')
+      localStorage.removeItem('honeyshield_live_alerts')
+      localStorage.removeItem('honeyshield_blocked_ips')
+      localStorage.removeItem('honeyshield_block_log')
+    } catch {}
+    this.pushUpdate()
   }
 
   blockIP(ip, blockedBy = 'admin', reason = 'Manual block') {
@@ -111,12 +125,6 @@ class LiveDataEngine {
   }
 
   pushUpdate() {
-    try {
-      localStorage.setItem('honeyshield_live_sessions', JSON.stringify(this.sessions))
-      localStorage.setItem('honeyshield_live_attacks', JSON.stringify(this.attackLog.slice(0, 100)))
-      localStorage.setItem('honeyshield_live_honeylogs', JSON.stringify(this.honeyLog.slice(0, 100)))
-      localStorage.setItem('honeyshield_live_alerts', JSON.stringify(this.alertLog.slice(0, 100)))
-    } catch {}
     this.updateCallback(this.getState())
   }
 
@@ -126,16 +134,28 @@ class LiveDataEngine {
       if (feedRes.ok) {
         const feed = await feedRes.json()
         if (feed.sessions && feed.sessions.length > 0) {
-          feed.sessions.forEach(s => this.updateSession({
-            sessionId: s.sessionId, username: s.username, ip: s.ip,
-            country: s.country, city: s.city, lat: s.lat, lng: s.lng,
-            state: s.state, riskScore: s.riskScore, role: s.role,
-            browser: s.browser, os: s.os, attackTypes: s.attackTypes,
-            attackCount: s.attackCount, inHoney: s.inHoney, lastSeen: s.lastSeen
-          }))
+          const tenMinsAgo = Date.now() - 10 * 60 * 1000
+          feed.sessions.forEach(s => {
+            const time = s.lastSeen ? new Date(s.lastSeen).getTime() : 0
+            if (s.isActive && time > tenMinsAgo) {
+              this.updateSession({
+                sessionId: s.sessionId, username: s.username, ip: s.ip,
+                country: s.country, city: s.city, lat: s.lat, lng: s.lng,
+                state: s.state, riskScore: s.riskScore, role: s.role,
+                browser: s.browser, os: s.os, attackTypes: s.attackTypes,
+                attackCount: s.attackCount, inHoney: s.inHoney, lastSeen: s.lastSeen
+              })
+            }
+          })
         }
         if (feed.attacks && feed.attacks.length > 0) {
-          feed.attacks.forEach(a => this.injectAttackEvent(a))
+          const tenMinsAgo = Date.now() - 10 * 60 * 1000
+          feed.attacks.forEach(a => {
+            const time = a.timestamp ? new Date(a.timestamp).getTime() : 0
+            if (time > tenMinsAgo) {
+              this.injectAttackEvent(a)
+            }
+          })
         }
       }
 
@@ -206,6 +226,7 @@ class LiveDataEngine {
     const COUNTRY_CENTROIDS = {
       'India': [20.5937, 78.9629],
       'United States': [37.0902, -95.7129],
+      'US': [37.0902, -95.7129],
       'Germany': [51.1657, 10.4515],
       'China': [35.8617, 104.1954],
       'Russia': [61.5240, 105.3188],
@@ -296,28 +317,16 @@ class LiveDataEngine {
     if (!attackDef) return
     let sessionIdx = targetSessionId ? this.sessions.findIndex(s => s.id === targetSessionId || s.sessionId === targetSessionId) : -1
     if (sessionIdx === -1) {
-      sessionIdx = this.sessions.findIndex(s => s.role === 'ATTACKER' || s.username === 'testuser' || s.username !== 'admin')
+      sessionIdx = this.sessions.findIndex(s => s.role === 'ATTACKER' && s.username !== 'admin')
     }
-    let session
-    if (sessionIdx === -1) {
-      session = {
-        id: targetSessionId || `ATTACKER-${Date.now()}`, ip: '127.0.0.1', country: 'Localhost', city: 'Localhost',
-        lat: 22.3, lng: 73.1, browser: 'Chrome', os: 'Windows', device: 'Desktop',
-        username: 'testuser', role: 'ATTACKER', state: 'ATTACKER', riskScore: 85,
-        riskHistory: [], attackTypes: [], attackCount: 0,
-        fingerprint: { deviceId: 'auto-001', behaviorSignature: 'Human manual attacker', requestPattern: 'Manual', toolHint: 'Browser' },
-        timeline: [], inHoney: true, honeyDuration: 0, honeyInteractions: 0, startTime: new Date(), duration: 0, isRealUser: true
-      }
-      this.sessions.push(session)
-      sessionIdx = this.sessions.length - 1
-    } else {
-      session = { ...this.sessions[sessionIdx] }
-    }
+    if (sessionIdx === -1) return
+    let session = { ...this.sessions[sessionIdx] }
     const event = {
       id: `ATK-${Date.now()}-${Math.random().toString(36).substr(2,4)}`,
       type: attackDef.label, severity: attackDef.severity,
       timestamp: new Date().toISOString(),
       sourceIP: session.ip, sourceCountry: session.country, sourceCity: session.city,
+      sourceLat: session.lat, sourceLng: session.lng,
       targetArea: attackDef.target, riskDelta: attackDef.riskDelta,
       sessionId: session.id, correlationId: `CAMP-${session.username}`
     }
@@ -518,9 +527,10 @@ class LiveDataEngine {
   }
 
   createStealthSession() {
+    const realHostIP = typeof localStorage !== 'undefined' ? (localStorage.getItem('honeyshield_real_public_ip') || '49.36.77.174') : '49.36.77.174'
     const s = {
-      id: `STEALTH-${Date.now()}`, ip: '172.16.0.99', country: 'Unknown', city: 'Unknown',
-      lat: 0, lng: 0, browser: 'Unknown', os: 'Unknown', device: 'Desktop',
+      id: `STEALTH-${Date.now()}`, ip: realHostIP, country: 'India', city: 'Vadodara',
+      lat: 22.3072, lng: 73.1812, browser: 'Chrome', os: 'Windows', device: 'Desktop',
       username: 'stealth-attacker', role: 'ATTACKER', state: 'ATTACKER', riskScore: 45,
       riskHistory: [], attackTypes: ['Reconnaissance'], attackCount: 1,
       fingerprint: { deviceId: 'stealth', behaviorSignature: 'Slow-and-low scanner', requestPattern: 'Stealthy', toolHint: 'Nmap' },

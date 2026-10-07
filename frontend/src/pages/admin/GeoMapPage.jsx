@@ -33,13 +33,16 @@ const getSessionCoords = (s) => {
   if (s && typeof s.lng === 'number' && typeof s.lat === 'number' && (s.lng !== 0 || s.lat !== 0)) {
     return [s.lng, s.lat];
   }
+  if (s && typeof s.sourceLng === 'number' && typeof s.sourceLat === 'number' && (s.sourceLng !== 0 || s.sourceLat !== 0)) {
+    return [s.sourceLng, s.sourceLat];
+  }
   if (s && s.country && COUNTRY_COORDS[s.country]) {
     return COUNTRY_COORDS[s.country];
   }
   if (s && s.sourceCountry && COUNTRY_COORDS[s.sourceCountry]) {
     return COUNTRY_COORDS[s.sourceCountry];
   }
-  return s?.role === 'ATTACKER' || s?.state === 'ATTACKER' ? [10.4515, 51.1657] : [73.1, 22.3];
+  return [73.1812, 22.3072];
 };
 
 // ----------------------------------------------------------------------------
@@ -158,7 +161,7 @@ const CyberGlobe3D = ({ sessions, attacks, onSelectSession }) => {
 
       // 4. Country Polygons from GeoJSON
       if (geojsonRef.current && geojsonRef.current.features) {
-        const attackCountries = new Set(attacks.map(a => a.sourceCountry || 'Germany'));
+        const attackCountries = new Set(attacks.map(a => a.sourceCountry).filter(Boolean));
         sessions.forEach(s => {
           if (s.state === 'ATTACKER' || s.role === 'ATTACKER') {
             if (s.country) attackCountries.add(s.country);
@@ -356,7 +359,7 @@ export default function GeoMapPage({ data, onBlockIP }) {
   const countryStats = useMemo(() => {
     const stats = {};
     (data.attackLog || []).forEach(a => {
-      const country = a.sourceCountry || 'Germany';
+      const country = a.sourceCountry || 'India';
       if (sevFilter === 'ALL' || a.severity === sevFilter) {
         stats[country] = (stats[country] || 0) + 1;
       }
@@ -403,7 +406,13 @@ export default function GeoMapPage({ data, onBlockIP }) {
         type: a.type || 'Attack Vector',
         sourceIP: a.sourceIP,
         targetArea: a.targetArea,
-        session: matchedSession || { ip: a.sourceIP, username: a.username || 'Attacker', state: 'ATTACKER', country: a.sourceCountry || 'Germany' }
+        session: matchedSession || {
+          ip: a.sourceIP || 'Unknown',
+          username: a.username || `Adversary (${a.sourceIP || 'Remote'})`,
+          state: 'ATTACKER',
+          country: a.sourceCountry || 'External',
+          city: a.sourceCity || a.sourceCountry || 'Remote'
+        }
       };
     }).filter(Boolean);
 
@@ -437,55 +446,7 @@ export default function GeoMapPage({ data, onBlockIP }) {
       }
     });
 
-    // Default mock files if attacker clicked deception files
-    if (files.length === 0 && (s.state === 'ATTACKER' || s.attackCount > 0)) {
-      files.push(
-        { fileName: 'payroll_2025.xlsx', action: 'DOWNLOAD_ATTEMPT', timestamp: s.lastSeen || new Date().toISOString(), status: 'TRAPPED IN HONEY CONTAINER' },
-        { fileName: 'system_admin_backup.sql', action: 'INSPECT_FILE', timestamp: s.lastSeen || new Date().toISOString(), status: 'TRAPPED IN HONEY CONTAINER' }
-      );
-    }
-
-    // Extract Database queries
-    const dbQueries = [];
-    attackLogs.forEach(a => {
-      if (a.type?.includes('SQL') || a.targetArea?.includes('db') || a.targetArea?.includes('query')) {
-        dbQueries.push({
-          query: a.payload || `SELECT * FROM users WHERE username='${s.username || 'admin'}' OR '1'='1'`,
-          targetTable: a.targetArea || '/api/v1/db/query',
-          timestamp: a.timestamp,
-          severity: a.severity
-        });
-      }
-    });
-
-    if (dbQueries.length === 0 && (s.state === 'ATTACKER' || s.attackCount > 0)) {
-      dbQueries.push({
-        query: `SELECT * FROM users WHERE role='ADMIN' --`,
-        targetTable: 'users / admin_credentials',
-        timestamp: s.lastSeen || new Date().toISOString(),
-        severity: 'CRITICAL'
-      });
-    }
-
-    // Extract Trapped Credentials
-    const trappedCreds = [];
-    honeyLogs.forEach(h => {
-      if (h.action?.includes('CREDS') || h.action?.includes('AUTH') || h.inputData) {
-        trappedCreds.push({
-          usernameAttempt: s.username || 'admin',
-          payload: h.inputData || h.payload || 'password: *** (Honey Trapped)',
-          timestamp: h.timestamp
-        });
-      }
-    });
-
-    if (trappedCreds.length === 0 && (s.state === 'ATTACKER' || s.attackCount > 0)) {
-      trappedCreds.push({
-        usernameAttempt: s.username || 'testuser',
-        payload: `Attempted credential stuffing: pass='admin123'`,
-        timestamp: s.lastSeen || new Date().toISOString()
-      });
-    }
+    // Do NOT inject fabricated/mock files, queries, or credentials — only show real trapped data
 
     // Timeline merge
     const fullTimeline = [
@@ -691,7 +652,14 @@ export default function GeoMapPage({ data, onBlockIP }) {
               return (
                 <div
                   key={a.id || i}
-                  onClick={() => setSelectedSession(matchedSession || { id: a.sessionId, ip: a.sourceIP, username: a.username || 'Attacker', state: 'ATTACKER', country: a.sourceCountry || 'Germany' })}
+                  onClick={() => setSelectedSession(matchedSession || {
+                    id: a.sessionId,
+                    ip: a.sourceIP || 'Unknown',
+                    username: a.username || `Adversary (${a.sourceIP || 'Remote'})`,
+                    state: 'ATTACKER',
+                    country: a.sourceCountry || 'External',
+                    city: a.sourceCity || a.sourceCountry || 'Remote'
+                  })}
                   style={{ background: '#121824', border: '1px solid #212836', borderRadius: '8px', padding: '10px 12px', marginBottom: '8px', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: '4px', transition: 'border 0.2s' }}
                   className="hover-card">
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -703,7 +671,7 @@ export default function GeoMapPage({ data, onBlockIP }) {
                     </span>
                   </div>
                   <div style={{ color: '#E6EDF3', fontSize: '11px', fontFamily: 'monospace' }}>
-                    IP: {a.sourceIP} ({a.sourceCountry || 'Unknown'})
+                    IP: {a.sourceIP || 'Unknown'} ({a.sourceCountry || 'External'})
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
                     <span style={{ color: '#00E5FF', fontSize: '10px', display: 'flex', alignItems: 'center', gap: '4px' }}>
@@ -761,7 +729,7 @@ export default function GeoMapPage({ data, onBlockIP }) {
                   </span>
                 </div>
                 <div style={{ color: '#00E5FF', fontSize: '12px', fontFamily: 'monospace', marginTop: '4px' }}>
-                  Session: {selectedSession.username || 'testuser'} | IP: {selectedSession.ip || '198.51.100.42'} ({selectedSession.country || 'Local'})
+                  Session: {selectedSession.username || 'testuser'} | IP: {selectedSession.ip || (typeof localStorage !== 'undefined' ? localStorage.getItem('honeyshield_real_public_ip') : null) || '49.36.77.174'} ({selectedSession.country || 'India'})
                 </div>
               </div>
 
@@ -918,7 +886,7 @@ export default function GeoMapPage({ data, onBlockIP }) {
             <div style={{ paddingTop: '16px', borderTop: '1px solid #30363D', marginTop: 'auto' }}>
               <button
                 onClick={() => {
-                  onBlockIP(selectedSession.ip || '198.51.100.42', `Blocked from Forensics Record Drawer — ${selectedSession.username}`);
+                  onBlockIP(selectedSession.ip || (typeof localStorage !== 'undefined' ? localStorage.getItem('honeyshield_real_public_ip') : null) || '49.36.77.174', `Blocked from Forensics Record Drawer — ${selectedSession.username}`);
                   setSelectedSession(null);
                 }}
                 style={{ width: '100%', padding: '12px', background: 'rgba(255, 42, 109, 0.2)', color: '#FF2A6D', border: '1px solid #FF2A6D', borderRadius: '8px', fontSize: '13px', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>

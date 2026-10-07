@@ -6,7 +6,7 @@ import HoneyLog from '../models/HoneyLog.js'
 import Alert from '../models/Alert.js'
 import BlockedIP from '../models/BlockedIP.js'
 import BlockedFingerprint from '../models/BlockedFingerprint.js'
-import { detectLocation } from '../middleware/geoip.js'
+import { detectLocation, resolveIPLocation } from '../middleware/geoip.js'
 import { cache } from '../services/cacheService.js'
 import { calculateRisk, getState, getAIPrediction } from '../services/riskEngine.js'
 import { checkIPReputation } from '../services/ipReputationService.js'
@@ -15,13 +15,27 @@ import { isAdminAuthenticated } from '../middleware/auth.js'
 import { broadcastAttack, broadcastHoney, broadcastSessionUpdate, broadcast } from '../services/broadcastService.js'
 import logger from '../middleware/logger.js'
 import { encrypt } from '../services/dataVaultService.js'
+import { checkBlockStatus } from '../middleware/blockCheck.js'
+
 const router = express.Router()
+
+// Apply to EVERY route — first line after router declaration
+router.use(checkBlockStatus)
 
 // GET /api/session/init — detect real IP + geo + device
 router.get('/init', async (req, res) => {
   try {
     const location = detectLocation(req)
     logger.info(`[INIT] ${location.ip} → ${location.city}, ${location.country} | ${location.browser}`)
+    res.json(location)
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+// GET /api/session/geo/:ip — lookup accurate geolocation for any IP
+router.get('/geo/:ip', async (req, res) => {
+  try {
+    const rawIP = req.params.ip
+    const location = resolveIPLocation(rawIP)
     res.json(location)
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
@@ -34,151 +48,121 @@ router.post('/register', async (req, res) => {
     // C3: Gate admin exemption on an authenticated admin session, not client-supplied role
     const adminAuth = await isAdminAuthenticated(req)
     if (!adminAuth) {
-      // Check 1: IP blocked in Redis cache
-      if (data.ip) {
-        const cachedBlock = await cache.get(`blocked:${data.ip}`)
-        if (cachedBlock?.blocked) {
-          if (mongoose.connection.readyState === 1) {
-            try {
-              await BlockedIP.findOneAndUpdate(
-                { ip: data.ip },
-                { $inc: { attemptCount: 1 }, lastAttempt: new Date() }
-              )
-            } catch {}
-          }
-          broadcast('blocked_attempt', {
-            ip: data.ip, username: data.username,
-            method: 'IP_BLOCK',
-            message: `Blocked IP ${data.ip} tried to reconnect after refresh`,
-            timestamp: new Date().toISOString()
-          })
-          logger.warn(`[BLOCKED] ${data.ip} tried to register but is already blocked`)
-          return res.status(403).json({ error: 'Blocked', blocked: true, reason: 'IP_BLOCKED' })
-        }
+      let clientIP = req.clientIP || data.ip || 'Unknown'
+      const isLocal = clientIP === '::1' || clientIP === '127.0.0.1' || clientIP.startsWith('127.') || clientIP === 'localhost' || clientIP === 'Unknown'
+      if (isLocal) {
+        const { getHostPublicIP } = await import('../middleware/geoip.js')
+        clientIP = getHostPublicIP() || '49.36.77.174'
+      }
 
-        // Check 2: IP blocked in MongoDB (source of truth)
+      let isExempted = false
+      try {
+        const exemptCached = await cache.get(`exempt:vpn:${clientIP}`)
+        if (exemptCached?.exempted) isExempted = true
+      } catch {}
+      if (!isExempted && mongoose.connection.readyState === 1) {
+        try {
+          const { default: ExemptedIP } = await import('../models/ExemptedIP.js')
+          const ex = await ExemptedIP.findOne({ ip: clientIP, expiresAt: { $gt: new Date() } })
+          if (ex) isExempted = true
+        } catch {}
+      }
+
+      const reputation = checkIPReputation(clientIP)
+      if (reputation.suspicious && !isExempted) {
+        const geo = resolveIPLocation(clientIP)
+        const vpnCountry = (data.country && data.country !== 'Unknown' && data.country !== 'Localhost') ? data.country : (geo?.country && geo.country !== 'Unknown' ? geo.country : 'External')
+        const vpnCity = (data.city && data.city !== 'Unknown' && data.city !== 'Localhost') ? data.city : (geo?.city && geo.city !== 'Unknown' ? geo.city : vpnCountry)
+
+        // Permanently block this IP
         if (mongoose.connection.readyState === 1) {
           try {
-            const dbBlock = await BlockedIP.findOne({ ip: data.ip })
-            if (dbBlock && (!dbBlock.expiresAt || new Date() < dbBlock.expiresAt)) {
-              await cache.set(`blocked:${data.ip}`, { blocked: true, reason: dbBlock.reason }, 86400 * 365)
-              await BlockedIP.findOneAndUpdate(
-                { ip: data.ip },
-                { $inc: { attemptCount: 1 }, lastAttempt: new Date() }
-              )
-              broadcast('blocked_attempt', {
-                ip: data.ip, username: data.username, method: 'DB_BLOCK',
-                message: `Blocked IP ${data.ip} tried to reconnect (re-cached from DB)`,
-                timestamp: new Date().toISOString()
-              })
-              logger.warn(`[BLOCKED] ${data.ip} found in DB — re-caching and rejecting`)
-              return res.status(403).json({ error: 'Blocked', blocked: true, reason: 'IP_BLOCKED' })
-            }
-          } catch (err) {
-            logger.warn(`[DB BLOCK CHECK ERROR] ${err.message}`)
+            await BlockedIP.findOneAndUpdate(
+              { ip: clientIP },
+              {
+                ip: clientIP,
+                blockedBy: 'SYSTEM_AUTO',
+                reason: `Auto-blocked: ${reputation.label} — ${reputation.reason}`,
+                permanent: true,
+                country: vpnCountry,
+                city: vpnCity,
+                blockedAt: new Date(),
+                attemptCount: 1
+              },
+              { upsert: true, new: true }
+            )
+          } catch (e) {
+            logger.error(`[VPN AUTO-BLOCK DB ERROR] ${e.message}`)
           }
         }
-      }
+        // Cache the block for 1 year
+        try {
+          await cache.set(`blocked:${clientIP}`, { blocked: true, reason: `Auto-blocked: ${reputation.label}` }, 86400 * 365)
+        } catch {}
 
-      // Check 3: Fingerprint blocked
-      if (data.fingerprint && typeof data.fingerprint === 'string') {
-        let fpBlock = await cache.get(`blocked:fp:${data.fingerprint}`)
-        if (!fpBlock?.blocked && mongoose.connection.readyState === 1) {
-          try {
-            const dbFp = await BlockedFingerprint.findOne({ fingerprint: data.fingerprint })
-            if (dbFp) {
-              fpBlock = { blocked: true, reason: dbFp.reason }
-              await cache.set(`blocked:fp:${data.fingerprint}`, fpBlock, 86400 * 365)
-            }
-          } catch {}
-        }
-        if (fpBlock?.blocked) {
-          if (mongoose.connection.readyState === 1) {
-            try {
-              await BlockedFingerprint.findOneAndUpdate(
-                { fingerprint: data.fingerprint },
-                { $inc: { attemptCount: 1 }, lastAttempt: new Date(), $addToSet: { associatedIPs: data.ip } }
-              )
-            } catch {}
-          }
-          broadcast('blocked_attempt', {
-            ip: data.ip, username: data.username, method: 'FINGERPRINT_BLOCK',
-            message: `Blocked fingerprint tried to reconnect from IP ${data.ip}`,
-            timestamp: new Date().toISOString()
-          })
-          logger.warn(`[BLOCKED] Fingerprint ${data.fingerprint.substr(0,8)}... blocked — new IP ${data.ip}`)
-          return res.status(403).json({ error: 'Blocked', blocked: true, reason: 'FINGERPRINT_BLOCKED' })
-        }
-      }
+        // Broadcast to admin — trigger siren
+        broadcast('vpn_detected', {
+          ip: clientIP,
+          username: data.username,
+          label: reputation.label,
+          autoBlocked: true,
+          playSiren: true,
+          country: vpnCountry,
+          city: vpnCity,
+          message: `VPN/Proxy auto-blocked: ${clientIP} detected as ${reputation.label}`,
+          timestamp: new Date().toISOString()
+        })
+        broadcast('ip_blocked', {
+          ip: clientIP,
+          blockedBy: 'SYSTEM_AUTO',
+          reason: `Auto-blocked: ${reputation.label}`,
+          country: vpnCountry,
+          city: vpnCity,
+          sessionsTerminated: 0,
+          autoBlock: true,
+          timestamp: new Date().toISOString()
+        })
 
-      // Check 4: VPN/proxy detection
-      if (data.ip) {
-        const reputation = await checkIPReputation(data.ip)
-        if (reputation.suspicious) {
-          logger.warn(`[VPN AUTO-BLOCK] ${data.ip} detected as ${reputation.label} — auto-blocking`)
-
-          if (mongoose.connection.readyState === 1) {
-            try {
-              await BlockedIP.findOneAndUpdate(
-                { ip: data.ip },
-                {
-                  ip: data.ip,
-                  blockedBy: 'SYSTEM_AUTO',
-                  reason: `Auto-blocked: ${reputation.label} — ${reputation.reason}`,
-                  permanent: true,
-                  country: data.country || 'Unknown',
-                  city: data.city || 'Unknown',
-                  blockedAt: new Date()
-                },
-                { upsert: true, new: true }
-              )
-            } catch (e) {
-              logger.error(`[VPN AUTO-BLOCK DB ERROR] ${e.message}`)
-            }
-          }
-
-          await cache.set(
-            `blocked:${data.ip}`,
-            { blocked: true, reason: `Auto-blocked: ${reputation.label}` },
-            86400 * 365
-          )
-
-          broadcast('vpn_detected', {
-            ip: data.ip,
-            username: data.username,
-            label: reputation.label,
-            reason: reputation.reason,
-            autoBlocked: true,
-            timestamp: new Date().toISOString()
-          })
-
-          broadcast('ip_blocked', {
-            ip: data.ip,
-            blockedBy: 'SYSTEM_AUTO',
-            reason: `Auto-blocked: ${reputation.label}`,
-            country: data.country,
-            city: data.city,
-            sessionsTerminated: 0,
-            autoBlock: true,
-            timestamp: new Date().toISOString()
-          })
-
-          logger.info(`[VPN AUTO-BLOCK] ${data.ip} permanently blocked as ${reputation.label}`)
-
-          return res.status(403).json({
-            error: 'Access denied',
-            reason: 'VPN_PROXY_DETECTED',
-            blocked: true,
-            label: reputation.label,
-            message: 'VPN and proxy connections are automatically blocked'
-          })
-        }
+        logger.warn(`[VPN AUTO-BLOCK] ${clientIP} blocked as ${reputation.label}`)
+        return res.status(403).json({
+          error: 'Access denied',
+          blocked: true,
+          reason: 'VPN_PROXY_DETECTED',
+          label: reputation.label,
+          ip: clientIP
+        })
       }
     }
+
+    let clientIP = req.clientIP || data.ip || 'Unknown'
+    const isLocal = clientIP === '::1' || clientIP === '127.0.0.1' || clientIP.startsWith('127.') || clientIP === 'localhost' || clientIP === 'Unknown'
+    if (isLocal) {
+      const { getHostPublicIP } = await import('../middleware/geoip.js')
+      clientIP = getHostPublicIP() || '49.36.77.174'
+    }
+
+    let resolvedGeo = null
+    if (clientIP && clientIP !== 'Unknown') {
+      resolvedGeo = resolveIPLocation(clientIP)
+    }
+
+    const country = (data.country && data.country !== 'Unknown' && data.country !== 'Localhost') ? data.country : (resolvedGeo?.country && resolvedGeo.country !== 'Unknown' ? resolvedGeo.country : (isLocal ? 'India' : 'External'))
+    const city = (data.city && data.city !== 'Unknown' && data.city !== 'Localhost') ? data.city : (resolvedGeo?.city && resolvedGeo.city !== 'Unknown' ? resolvedGeo.city : (isLocal ? 'Vadodara' : (country || 'Remote')))
+    const region = data.region || resolvedGeo?.region || (isLocal ? 'Gujarat' : '')
+    const lat = (typeof data.lat === 'number' && data.lat !== 0) ? data.lat : (resolvedGeo?.lat && resolvedGeo.lat !== 0 ? resolvedGeo.lat : (isLocal ? 22.3072 : 0))
+    const lng = (typeof data.lng === 'number' && data.lng !== 0) ? data.lng : (resolvedGeo?.lng && resolvedGeo.lng !== 0 ? resolvedGeo.lng : (isLocal ? 73.1812 : 0))
+    const timezone = data.timezone || resolvedGeo?.timezone || (isLocal ? 'Asia/Kolkata' : 'UTC')
 
     const sessionId = data.sessionId || `SESSION-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`
     let session = {
       ...data,
+      ip: clientIP,
+      country,
+      city,
+      region,
+      lat,
+      lng,
+      timezone,
       sessionId,
       isActive: true,
       isBlocked: false,
@@ -186,9 +170,9 @@ router.post('/register', async (req, res) => {
     }
     if (mongoose.connection.readyState === 1) {
       try {
-        if (data.ip || data.fingerprint) {
+        if (clientIP || data.fingerprint) {
           const clearQuery = []
-          if (data.ip) clearQuery.push({ ip: data.ip })
+          if (clientIP) clearQuery.push({ ip: clientIP })
           if (data.fingerprint && typeof data.fingerprint === 'string') {
             clearQuery.push({ fingerprintHash: data.fingerprint }, { 'fingerprint.hash': data.fingerprint })
           }
@@ -202,6 +186,13 @@ router.post('/register', async (req, res) => {
           { sessionId },
           {
             ...data,
+            ip: clientIP,
+            country,
+            city,
+            region,
+            lat,
+            lng,
+            timezone,
             sessionId,
             fingerprintHash: typeof data.fingerprint === 'string' ? data.fingerprint : null,
             state: data.role === 'ATTACKER' ? 'ATTACKER' : 'NORMAL',
@@ -213,7 +204,7 @@ router.post('/register', async (req, res) => {
             lastSeen: new Date(),
             fingerprint: {
               hash: typeof data.fingerprint === 'string' ? data.fingerprint : undefined,
-              deviceId: (data.ip || '').replace(/\./g,'').substr(0,8),
+              deviceId: (clientIP || '').replace(/\./g,'').substr(0,8),
               behaviorSignature: data.role === 'ATTACKER' ? 'Human manual attacker' : 'Authenticated user',
               requestPattern: 'Linear', toolHint: data.browser || 'Browser'
             }
@@ -226,12 +217,12 @@ router.post('/register', async (req, res) => {
     }
     await cache.set(`session:${sessionId}`, {
       sessionId, username: data.username, role: data.role,
-      ip: data.ip, country: data.country, city: data.city,
-      lat: data.lat, lng: data.lng, state: session.state || 'NORMAL', riskScore: session.riskScore || 5
+      ip: clientIP, country, city,
+      lat, lng, state: session.state || 'NORMAL', riskScore: session.riskScore || 5
     })
     req.app.get('io').emit('session_registered', session)
     broadcastSessionUpdate(session)
-    logger.info(`[REGISTER] ${data.username} (${data.role}) from ${data.ip} (${data.city}, ${data.country})`)
+    logger.info(`[REGISTER] ${data.username} (${data.role}) from ${clientIP} (${city}, ${country})`)
     res.json({ success: true, session })
   } catch (err) { logger.error(`Register error: ${err.message}`); res.status(500).json({ error: err.message }) }
 })
@@ -338,20 +329,46 @@ router.post('/attack', async (req, res) => {
       return res.status(403).json({ error: 'Blocked', blocked: true, reason: 'VPN_PROXY_DETECTED' })
     }
 
-    let session = { sessionId, username: username || 'testuser', role: 'ATTACKER', ip: sourceIP || 'Unknown', riskScore: 85, state: 'ATTACKER' }
-    let attack = { attackId: `ATK-${Date.now()}`, type: attackDef.label || attackType || 'Attack', severity: attackDef.severity || 'MEDIUM', sourceIP, sourceCountry, sourceCity, targetArea: attackDef.target || '/system' }
+    // Auto-resolve live location from sourceIP
+    const isLocalAtk = !sourceIP || sourceIP === 'Unknown' || sourceIP === '127.0.0.1' || sourceIP === '::1' || sourceIP.startsWith('127.') || sourceIP === 'localhost'
+    if (isLocalAtk) {
+      const { getHostPublicIP } = await import('../middleware/geoip.js')
+      sourceIP = getHostPublicIP() || '49.36.77.174'
+    }
+
+    const geo = resolveIPLocation(sourceIP)
+    if (geo) {
+      if (!sourceCountry || sourceCountry === 'Unknown' || sourceCountry === 'Localhost') {
+        sourceCountry = (geo.country && geo.country !== 'Unknown') ? geo.country : (isLocalAtk ? 'India' : 'External')
+      }
+      if (!sourceCity || sourceCity === 'Unknown' || sourceCity === 'Localhost') {
+        sourceCity = (geo.city && geo.city !== 'Unknown') ? geo.city : (isLocalAtk ? 'Vadodara' : (sourceCountry || 'Remote'))
+      }
+      if (!sourceLat || sourceLat === 0) {
+        sourceLat = geo.lat !== 0 ? geo.lat : (isLocalAtk ? 22.3072 : 0)
+      }
+      if (!sourceLng || sourceLng === 0) {
+        sourceLng = geo.lng !== 0 ? geo.lng : (isLocalAtk ? 73.1812 : 0)
+      }
+    }
+
+    const adversaryName = username || `Adversary (${sourceIP || 'Remote'})`
+    let session = { sessionId, username: adversaryName, role: 'ATTACKER', ip: sourceIP || 'Unknown', country: sourceCountry || 'Unknown', city: sourceCity || 'Unknown', lat: sourceLat || 0, lng: sourceLng || 0, riskScore: 85, state: 'ATTACKER' }
+    let attack = { attackId: `ATK-${Date.now()}`, type: attackDef.label || attackType || 'Attack', severity: attackDef.severity || 'MEDIUM', sourceIP, sourceCountry, sourceCity, sourceLat, sourceLng, targetArea: attackDef.target || '/system', timestamp: new Date().toISOString() }
 
     if (mongoose.connection.readyState === 1) {
       try {
         let dbSession = await Session.findOne({ sessionId })
         if (!dbSession) {
           dbSession = await Session.create({
-            sessionId, username: username || 'testuser', role: 'ATTACKER',
+            sessionId, username: adversaryName, role: 'ATTACKER',
             ip: sourceIP || 'Unknown', country: sourceCountry || 'Unknown',
             city: sourceCity || 'Unknown', lat: sourceLat || 0, lng: sourceLng || 0,
             state: 'ATTACKER', riskScore: 85, isActive: true,
             fingerprintHash: fingerprint || null,
-            ipReputation: reputation
+            ipReputation: reputation,
+            loginTime: new Date(),
+            lastSeen: new Date()
           })
         }
         const newScore = Math.min(100, (dbSession.riskScore || 0) + (attackDef.riskDelta || 10))
@@ -360,18 +377,26 @@ router.post('/attack', async (req, res) => {
           attackId: `ATK-${Date.now()}-${Math.random().toString(36).substr(2,4)}`,
           type: attackDef.label || attackType || 'Attack', severity: attackDef.severity || 'MEDIUM',
           sourceIP: sourceIP || dbSession.ip, sourceCountry: sourceCountry || dbSession.country,
-          sourceCity: sourceCity || dbSession.city, targetArea: attackDef.target || '/system',
-          riskDelta: attackDef.riskDelta || 10, sessionId, correlationId: `CAMP-${sessionId}`
+          sourceCity: sourceCity || dbSession.city,
+          sourceLat: sourceLat || dbSession.lat || 0,
+          sourceLng: sourceLng || dbSession.lng || 0,
+          targetArea: attackDef.target || '/system',
+          riskDelta: attackDef.riskDelta || 10, sessionId, correlationId: `CAMP-${sessionId}`,
+          timestamp: new Date()
         })
         session = await Session.findOneAndUpdate(
           { sessionId },
           {
             riskScore: newScore, state: newState,
+            country: sourceCountry || dbSession.country,
+            city: sourceCity || dbSession.city,
+            lat: sourceLat || dbSession.lat,
+            lng: sourceLng || dbSession.lng,
             fingerprintHash: fingerprint || dbSession.fingerprintHash || null,
             ipReputation: reputation,
             $addToSet: { attackTypes: attackDef.label || attackType || 'Attack' },
             $inc: { attackCount: 1 },
-            $push: { timeline: { timestamp: new Date(), action: 'ATTACK', detail: `${attackDef.label || attackType} → ${attackDef.target || '/system'}`, severity: attackDef.severity || 'MEDIUM' } },
+            $push: { timeline: { timestamp: new Date(), action: 'ATTACK', detail: `${attackDef.label || attackType} from ${sourceIP || dbSession.ip} (${sourceCity || dbSession.city}, ${sourceCountry || dbSession.country}) → ${attackDef.target || '/system'}`, severity: attackDef.severity || 'MEDIUM' } },
             lastSeen: new Date()
           },
           { new: true }

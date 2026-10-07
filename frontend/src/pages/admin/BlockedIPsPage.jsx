@@ -125,8 +125,24 @@ const BlockedIPsPage = ({
   }
 
   // Action 1: Unblock IP only
-  const handleUnblockIP = async (ip) => {
-    await onUnblockIP(ip)
+  const handleUnblockIP = async (ip, reason) => {
+    try {
+      const res = await fetch(`${BACKEND}/api/blocklist/${encodeURIComponent(ip)}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify({ reason: reason || 'Admin unblocked' })
+      })
+      const data = await res.json()
+      if (data.success) {
+        setBlockedList(prev => prev.filter(b => b.ip !== ip))
+        addToast(`✅ ${ip} fully unblocked — ${data.fingerprintsCleared || 0} fingerprints cleared`, 'success')
+      } else {
+        addToast(`Failed to unblock ${ip}: ${data.error}`, 'error')
+      }
+    } catch (err) {
+      addToast(`Unblock error: ${err.message}`, 'error')
+    }
+    if (onUnblockIP) await onUnblockIP(ip, reason)
     await fetchBlocklists()
     await fetchAuditLogs()
   }
