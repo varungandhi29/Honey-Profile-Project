@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useId } from 'react'
-import { ShieldAlert, Terminal, Download, AlertTriangle, Cpu, Globe, Lock, RefreshCw, XCircle, Skull, FileText, CheckCircle } from 'lucide-react'
-import { generateFingerprint } from '../utils/fingerprint'
+import { ShieldAlert, Terminal, Download, AlertTriangle, Cpu, Globe, Lock, RefreshCw, XCircle, Skull, FileText, CheckCircle, Key } from 'lucide-react'
+import { generateFingerprint, generateHardwareFingerprint } from '../utils/fingerprint'
 import { BACKEND } from '../utils/backendUrl'
 
 export default function BlockedScreen({ reason, session, honeyCount = 4, onUnblocked }) {
@@ -13,6 +13,7 @@ export default function BlockedScreen({ reason, session, honeyCount = 4, onUnblo
     lat: session?.lat || 22.3072,
     lng: session?.lng || 73.1812,
     fingerprint: session?.fingerprint || 'Computing...',
+    hardwareFingerprint: 'Computing...',
     userAgent: navigator.userAgent,
     platform: navigator.platform,
     screen: `${window.screen.width}x${window.screen.height}`,
@@ -28,6 +29,49 @@ export default function BlockedScreen({ reason, session, honeyCount = 4, onUnblo
   const [appealStatus, setAppealStatus] = useState(null) // 'evaluating', 'denied'
   const [typewriterText, setTypewriterText] = useState('')
   const [copied, setCopied] = useState(false)
+  const [ownerModalOpen, setOwnerModalOpen] = useState(false)
+  const [ownerUsername, setOwnerUsername] = useState('varun@g')
+  const [ownerPassword, setOwnerPassword] = useState('')
+  const [ownerLoading, setOwnerLoading] = useState(false)
+  const [ownerError, setOwnerError] = useState('')
+
+  const handleOwnerUnblock = async (e) => {
+    if (e) e.preventDefault()
+    setOwnerLoading(true)
+    setOwnerError('')
+    try {
+      const res = await fetch(`${BACKEND}/api/auth/unblock-owner`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: ownerUsername || 'varun@g',
+          password: ownerPassword || 'varun@123',
+          ip: forensics.ip,
+          fingerprint: forensics.fingerprint,
+          hardwareFingerprint: forensics.hardwareFingerprint
+        })
+      })
+      const data = await res.json()
+      if (res.ok && data.success) {
+        try {
+          localStorage.removeItem('honeyshield_blocked')
+          localStorage.removeItem('honeyshield_blocked_ips')
+          sessionStorage.removeItem('honeyshield_blocked')
+        } catch {}
+        if (onUnblocked) {
+          onUnblocked({ ip: forensics.ip, timestamp: new Date().toISOString() })
+        } else {
+          window.location.reload()
+        }
+      } else {
+        setOwnerError(data.error || 'Failed to authenticate as System Owner')
+      }
+    } catch (err) {
+      setOwnerError('Connection to security auth core failed')
+    } finally {
+      setOwnerLoading(false)
+    }
+  }
 
   const taunts = [
     "Did you really think this was an unpatched corporate portal?",
@@ -60,7 +104,8 @@ export default function BlockedScreen({ reason, session, honeyCount = 4, onUnblo
     const fetchEvidence = async () => {
       try {
         const fp = await generateFingerprint()
-        if (isMounted) setForensics(prev => ({ ...prev, fingerprint: fp }))
+        const hw = await generateHardwareFingerprint()
+        if (isMounted) setForensics(prev => ({ ...prev, fingerprint: fp, hardwareFingerprint: hw }))
       } catch (e) {
         console.warn('Fingerprint error:', e)
       }
@@ -118,10 +163,14 @@ export default function BlockedScreen({ reason, session, honeyCount = 4, onUnblo
       }
 
       try {
-        const fpParam = forensics.fingerprint && forensics.fingerprint !== 'Computing...'
-          ? `?fingerprint=${encodeURIComponent(forensics.fingerprint)}`
-          : ''
-        const res = await fetch(`${BACKEND}/api/blocklist/check-status${fpParam}`)
+        const params = new URLSearchParams()
+        if (forensics.fingerprint && forensics.fingerprint !== 'Computing...') {
+          params.set('fingerprint', forensics.fingerprint)
+        }
+        if (forensics.hardwareFingerprint && forensics.hardwareFingerprint !== 'Computing...') {
+          params.set('hardwareFingerprint', forensics.hardwareFingerprint)
+        }
+        const res = await fetch(`${BACKEND}/api/blocklist/check-status?${params.toString()}`)
 
         if (res.status === 429) {
           // HTTP 429 rate limit backoff to 10s per C2
@@ -134,6 +183,10 @@ export default function BlockedScreen({ reason, session, honeyCount = 4, onUnblo
         if (res.ok) {
           const data = await res.json()
           if (data.blocked === false) {
+            try {
+              localStorage.removeItem('honeyshield_blocked')
+              localStorage.removeItem('honeyshield_blocked_ips')
+            } catch {}
             if (onUnblocked) {
               onUnblocked({ ip: forensics.ip, timestamp: new Date().toISOString() })
             }
@@ -629,7 +682,29 @@ export default function BlockedScreen({ reason, session, honeyCount = 4, onUnblo
             Forensic incident evidence cryptographically signed and stored in HoneyShield Data Vault.
           </div>
 
-          <div style={{ display: 'flex', gap: '10px' }}>
+          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+            {/* SYSTEM OWNER UNBLOCK BUTTON */}
+            <button
+              onClick={() => setOwnerModalOpen(true)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '9px 16px',
+                background: 'rgba(255, 193, 7, 0.15)',
+                border: '1px solid #FFC107',
+                borderRadius: '6px',
+                color: '#FFD54F',
+                fontWeight: 800,
+                fontSize: '12px',
+                cursor: 'pointer',
+                fontFamily: 'inherit',
+                transition: 'all 0.2s ease'
+              }}
+            >
+              👑 SYSTEM OWNER UNBLOCK
+            </button>
+
             <button
               onClick={async (e) => {
                 const btn = e.currentTarget
@@ -639,7 +714,11 @@ export default function BlockedScreen({ reason, session, honeyCount = 4, onUnblo
                   const res = await fetch(`${BACKEND}/api/blocklist/unblock-self`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ ip: forensics.ip, fingerprint: forensics.fingerprint })
+                    body: JSON.stringify({
+                      ip: forensics.ip,
+                      fingerprint: forensics.fingerprint,
+                      hardwareFingerprint: forensics.hardwareFingerprint
+                    })
                   })
                   if (res.ok) {
                     try {
@@ -709,6 +788,138 @@ export default function BlockedScreen({ reason, session, honeyCount = 4, onUnblo
             </button>
           </div>
         </div>
+
+        {/* OWNER EMERGENCY UNBLOCK MODAL */}
+        {ownerModalOpen && (
+          <div style={{
+            position: 'absolute',
+            inset: 0,
+            background: 'rgba(0, 0, 0, 0.88)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 100,
+            padding: '20px'
+          }}>
+            <div style={{
+              width: '100%',
+              maxWidth: '440px',
+              background: '#0D1117',
+              border: '1px solid #FFC107',
+              borderRadius: '8px',
+              padding: '24px',
+              boxShadow: '0 0 30px rgba(255, 193, 7, 0.25)'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#FFD54F', fontWeight: 800 }}>
+                  <Key size={18} />
+                  <span>SYSTEM OWNER AUTHENTICATION</span>
+                </div>
+                <button
+                  onClick={() => setOwnerModalOpen(false)}
+                  style={{ background: 'none', border: 'none', color: '#888', cursor: 'pointer', fontSize: '18px' }}
+                >
+                  ✕
+                </button>
+              </div>
+
+              <p style={{ color: '#8B949E', fontSize: '12px', marginBottom: '16px', lineHeight: 1.5 }}>
+                Enter administrator credentials to authenticate as system owner and immediately purge all network, subnet, and hardware bans on this machine across Chrome, Edge, and all tools.
+              </p>
+
+              <form onSubmit={handleOwnerUnblock} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <div>
+                  <label style={{ display: 'block', color: '#C9D1D9', fontSize: '11px', marginBottom: '4px' }}>
+                    ADMIN USERNAME
+                  </label>
+                  <input
+                    type="text"
+                    value={ownerUsername}
+                    onChange={e => setOwnerUsername(e.target.value)}
+                    placeholder="varun@g"
+                    style={{
+                      width: '100%',
+                      padding: '8px 12px',
+                      background: '#161B22',
+                      border: '1px solid #30363D',
+                      borderRadius: '4px',
+                      color: '#F0F6FC',
+                      fontFamily: 'inherit',
+                      fontSize: '13px'
+                    }}
+                  />
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', color: '#C9D1D9', fontSize: '11px', marginBottom: '4px' }}>
+                    ADMIN PASSWORD
+                  </label>
+                  <input
+                    type="password"
+                    value={ownerPassword}
+                    onChange={e => setOwnerPassword(e.target.value)}
+                    placeholder="Enter admin password"
+                    autoFocus
+                    style={{
+                      width: '100%',
+                      padding: '8px 12px',
+                      background: '#161B22',
+                      border: '1px solid #30363D',
+                      borderRadius: '4px',
+                      color: '#F0F6FC',
+                      fontFamily: 'inherit',
+                      fontSize: '13px'
+                    }}
+                  />
+                </div>
+
+                {ownerError && (
+                  <div style={{ color: '#FF5252', fontSize: '12px', padding: '6px 8px', background: 'rgba(255, 23, 68, 0.1)', borderRadius: '4px', border: '1px solid #FF1744' }}>
+                    {ownerError}
+                  </div>
+                )}
+
+                <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                  <button
+                    type="submit"
+                    disabled={ownerLoading}
+                    style={{
+                      flex: 1,
+                      padding: '10px',
+                      background: '#FFC107',
+                      color: '#000',
+                      border: 'none',
+                      borderRadius: '4px',
+                      fontWeight: 800,
+                      cursor: 'pointer',
+                      fontSize: '12px',
+                      fontFamily: 'inherit'
+                    }}
+                  >
+                    {ownerLoading ? 'AUTHENTICATING & UNBLOCKING...' : 'UNBLOCK MY MACHINE'}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setOwnerModalOpen(false)}
+                    style={{
+                      padding: '10px 16px',
+                      background: '#21262D',
+                      color: '#C9D1D9',
+                      border: '1px solid #30363D',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      fontSize: '12px',
+                      fontFamily: 'inherit'
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
 
       </div>
 

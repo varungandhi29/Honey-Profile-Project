@@ -3,7 +3,7 @@ import LiveDataEngine from './engine/LiveDataEngine'
 import { USERS, getUsers, ATTACK_TYPES, HONEY_TARGET_MAP } from './engine/constants'
 import { useSocket } from './hooks/useSocket'
 import { useNotifications } from './hooks/useNotifications'
-import { generateFingerprint } from './utils/fingerprint'
+import { generateFingerprint, generateHardwareFingerprint } from './utils/fingerprint'
 import { alertEngine } from './audio/alertEngine'
 import { honeyBus } from './utils/honeyBus'
 import LoginPage from './pages/LoginPage'
@@ -107,9 +107,21 @@ export default function App() {
   }, [addToast])
 
   // Only reconcile / verify clients who ALREADY have a local block flag from a prior session.
-  // Ordinary, unflagged visitors skip check-status entirely and render normal app/login immediately.
+  // Universal Cross-Browser & Cross-Device Block Verification
   useEffect(() => {
     let isCancelled = false
+
+    // 0. System Owner / Admin Exemption Check
+    const token = sessionStorage.getItem('honeyshield_admin_token')
+    if (token) {
+      try {
+        localStorage.removeItem('honeyshield_blocked')
+        localStorage.removeItem('honeyshield_blocked_ips')
+      } catch {}
+      setVerificationState('IDLE')
+      setAppBlocked(false)
+      return
+    }
 
     let wasLocallyFlagged = false
     try {
@@ -117,114 +129,84 @@ export default function App() {
       wasLocallyFlagged = saved ? JSON.parse(saved)?.blocked === true : false
     } catch {}
 
-    // FAST-PATH: If this client has no prior block flag in localStorage,
-    // render normal app/login immediately, but perform a fast background hardware fingerprint check
-    // to enforce persistent containment even in Private / Incognito browser windows.
-    if (!wasLocallyFlagged) {
-      setVerificationState('IDLE')
-      setAppBlocked(false)
-      generateFingerprint().then(fp => {
-        if (!fp || isCancelled) return
-        fetch(`${BACKEND}/api/blocklist/check-status?fingerprint=${encodeURIComponent(fp)}`, {
-          signal: AbortSignal.timeout(4000)
-        }).then(r => r.json()).then(data => {
-          if (!isCancelled && data && data.blocked === true) {
-            setVerificationState('CONFIRMED_BLOCKED')
-            setAppBlocked(true)
-            setAppBlockedReason(data.reason || 'FINGERPRINT_BLOCKED')
-            try {
-              localStorage.setItem('honeyshield_blocked', JSON.stringify({ blocked: true, reason: 'FINGERPRINT_BLOCKED', fingerprint: fp }))
-            } catch {}
-          }
-        }).catch(() => {})
-      }).catch(() => {})
-      return
-    }
-
-    // SLOW-PATH: Client has a recorded block flag in localStorage that must be reconciled.
-    // Invoke strict Three-State fail-closed verification.
-    const checkPersistentBlock = async (retryCount = 0) => {
+    const runBlockCheck = async (retryCount = 0) => {
       if (isCancelled) return
-      setVerificationState('CHECKING')
+      if (wasLocallyFlagged) setVerificationState('CHECKING')
 
       try {
-        // 10000ms timeout tolerates cold-start backends (Render / Koyeb / sleeping hosts)
-        const controller = new AbortController()
-        const timeoutId = setTimeout(() => controller.abort(), 10000)
+        const fp = await generateFingerprint()
+        const hw = await generateHardwareFingerprint()
+        if (isCancelled) return
 
-        let fpParam = ''
-        try {
-          const fp = await generateFingerprint()
-          if (fp) fpParam = `?fingerprint=${encodeURIComponent(fp)}`
-        } catch {}
+        const params = new URLSearchParams()
+        if (fp) params.set('fingerprint', fp)
+        if (hw) params.set('hardwareFingerprint', hw)
 
-        const res = await fetch(`${BACKEND}/api/blocklist/check-status${fpParam}`, {
-          signal: controller.signal
+        const res = await fetch(`${BACKEND}/api/blocklist/check-status?${params.toString()}`, {
+          signal: AbortSignal.timeout(6000)
         })
-        clearTimeout(timeoutId)
 
         if (res.ok) {
           const data = await res.json()
           if (data && data.blocked === true) {
-            // STATE 2: CONFIRMED BLOCKED — authoritative 200 from live server
             if (isCancelled) return
             setVerificationState('CONFIRMED_BLOCKED')
             setAppBlocked(true)
-            setAppBlockedReason('IP_BLOCKED')
+            setAppBlockedReason(data.reason || 'PERMANENT_DEVICE_BAN')
+            try {
+              localStorage.setItem('honeyshield_blocked', JSON.stringify({
+                blocked: true,
+                reason: data.reason || 'PERMANENT_DEVICE_BAN',
+                fingerprint: fp,
+                hardwareFingerprint: hw
+              }))
+            } catch {}
             return
           } else if (data && data.blocked === false) {
-            // STATE 1: CONFIRMED UNBLOCKED — authoritative 200 confirming clean status
             if (isCancelled) return
-            localStorage.removeItem('honeyshield_blocked')
-            localStorage.removeItem('honeyshield_blocked_ips')
-            setVerificationState('CONFIRMED_UNBLOCKED')
+            try {
+              localStorage.removeItem('honeyshield_blocked')
+              localStorage.removeItem('honeyshield_blocked_ips')
+            } catch {}
+            setVerificationState(wasLocallyFlagged ? 'CONFIRMED_UNBLOCKED' : 'IDLE')
             setAppBlocked(false)
             setAppBlockedReason(null)
-            setUnblockedData({
-              ip: 'Your IP',
-              timestamp: new Date().toISOString()
-            })
+            if (wasLocallyFlagged) {
+              setUnblockedData({
+                ip: 'Your IP',
+                timestamp: new Date().toISOString()
+              })
+            }
             return
           }
         }
 
-        // STATE 3: UNKNOWN (HTTP 429, 500, 502, 503, 404)
-        // STRICT FAIL-CLOSED: DO NOT purge localStorage, DO NOT grant access
-        if (isCancelled) return
-        const isRateLimited = res.status === 429
-        const retryDelay = isRateLimited ? 10000 : Math.min(3000 * Math.pow(1.5, retryCount), 15000)
-        const reasonDesc = isRateLimited
-          ? 'Rate limit active (HTTP 429)'
-          : `Server returned HTTP ${res.status}`
-
-        setVerificationState('UNKNOWN_RETRYING')
-        setVerifyMessage(`Unable to verify status: ${reasonDesc}. Retrying in ${Math.round(retryDelay / 1000)}s...`)
-
-        retryTimeoutRef.current = setTimeout(() => {
-          checkPersistentBlock(retryCount + 1)
-        }, retryDelay)
-
+        // Server returned error / 429
+        if (wasLocallyFlagged) {
+          const retryDelay = Math.min(3000 * Math.pow(1.5, retryCount), 15000)
+          setVerificationState('UNKNOWN_RETRYING')
+          setVerifyMessage(`Checking security status... retrying in ${Math.round(retryDelay / 1000)}s`)
+          retryTimeoutRef.current = setTimeout(() => runBlockCheck(retryCount + 1), retryDelay)
+        } else {
+          setVerificationState('IDLE')
+          setAppBlocked(false)
+        }
       } catch (err) {
-        // STATE 3: UNKNOWN (Network error, connection refused, AbortSignal 10s timeout)
-        // STRICT FAIL-CLOSED: DO NOT purge localStorage, DO NOT grant access
         if (isCancelled) return
-        const isTimeout = err.name === 'AbortError'
-        const retryDelay = Math.min(4000 * Math.pow(1.5, retryCount), 15000)
-        const reasonDesc = isTimeout
-          ? 'Connection timed out (backend starting up)'
-          : 'Network connection unreachable'
-
-        setVerificationState('UNKNOWN_RETRYING')
-        setVerifyMessage(`Unable to verify status: ${reasonDesc}. Retrying in ${Math.round(retryDelay / 1000)}s...`)
-
-        retryTimeoutRef.current = setTimeout(() => {
-          checkPersistentBlock(retryCount + 1)
-        }, retryDelay)
+        if (wasLocallyFlagged) {
+          const retryDelay = Math.min(4000 * Math.pow(1.5, retryCount), 15000)
+          setVerificationState('UNKNOWN_RETRYING')
+          setVerifyMessage(`Network unreachable... retrying in ${Math.round(retryDelay / 1000)}s`)
+          retryTimeoutRef.current = setTimeout(() => runBlockCheck(retryCount + 1), retryDelay)
+        } else {
+          setVerificationState('IDLE')
+          setAppBlocked(false)
+        }
       }
     }
 
-    checkPersistentBlockRef.current = checkPersistentBlock
-    checkPersistentBlock()
+    checkPersistentBlockRef.current = runBlockCheck
+    runBlockCheck()
 
     return () => {
       isCancelled = true
@@ -584,6 +566,7 @@ export default function App() {
     requestPermission()
     const location = await getRealLocation()
     const fingerprint = await generateFingerprint()
+    const hardwareFingerprint = await generateHardwareFingerprint()
     const browser = location.browser || 'Browser'
     const os = location.os || navigator.platform || 'Desktop'
 
@@ -593,15 +576,28 @@ export default function App() {
         const res = await fetch(`${BACKEND}/api/auth/admin-login`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username: credentials.username, password: credentials.password })
+          body: JSON.stringify({
+            username: credentials.username,
+            password: credentials.password,
+            fingerprint,
+            hardwareFingerprint,
+            ip: location?.ip
+          })
         })
         const data = await res.json()
         if (res.ok && data.success && data.token) {
           sessionStorage.setItem('honeyshield_admin_token', data.token)
+          try {
+            localStorage.removeItem('honeyshield_blocked')
+            localStorage.removeItem('honeyshield_blocked_ips')
+          } catch {}
+          setIsBlocked(false)
+          setAppBlocked(false)
+          setVerificationState('IDLE')
           const adminUser = { ...data.user, role: 'ADMIN', isAdmin: true }
           setCurrentUser(adminUser)
           sessionIdRef.current = `ADMIN-${Date.now()}`
-          addToast('Welcome Admin!', 'success')
+          addToast('Welcome System Owner!', 'success')
           return
         } else if (res.status === 401 && data.isAdminUser) {
           setLoginError('Invalid admin credentials')
@@ -623,6 +619,8 @@ export default function App() {
         username: credentials.username,
         password: credentials.password,
         fingerprint,
+        hardwareFingerprint,
+        associatedIPs: [realPublicIP, location.ip].filter(Boolean),
         ip: realPublicIP,
         lat: parseFloat(location.lat) || (isIndiaLoc ? 22.3072 : 0),
         lng: parseFloat(location.lng) || (isIndiaLoc ? 73.1812 : 0),

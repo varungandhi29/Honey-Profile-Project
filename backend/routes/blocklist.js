@@ -11,8 +11,9 @@ import { cache } from '../services/cacheService.js'
 import { broadcast } from '../services/broadcastService.js'
 import { checkIPReputation } from '../services/ipReputationService.js'
 import { detectLocation, resolveIPLocation } from '../middleware/geoip.js'
-import { requireAdmin } from '../middleware/auth.js'
+import { requireAdmin, isAdminAuthenticated } from '../middleware/auth.js'
 import logger from '../middleware/logger.js'
+import { getIPv6Prefix, verifyBlockState } from '../middleware/blockCheck.js'
 
 const router = express.Router()
 
@@ -41,10 +42,18 @@ router.get('/', requireAdmin, async (req, res) => {
 // POST /api/blocklist — block an IP (Admin only)
 router.post('/', requireAdmin, async (req, res) => {
   try {
-    const { ip, reason, permanent, expiresAt } = req.body
+    const { ip, reason, permanent, expiresAt, fingerprint, hardwareFingerprint, associatedIPs } = req.body
     const adminUsername = req.admin?.username || 'admin'
     if (!ip) return res.status(400).json({ error: 'IP required' })
 
+    // SAFETY CHECK: Prevent administrator from blocking their own current connection IP
+    const callerIP = req.ip?.replace('::ffff:', '').trim()
+    if (callerIP && (callerIP === ip || (ip === '127.0.0.1' && callerIP === '::1'))) {
+      logger.warn(`[BLOCK REJECTED] Admin ${adminUsername} attempted to block own connection IP: ${ip}`)
+      return res.status(400).json({ error: 'Cannot block administrator current connection IP. Action rejected for safety.' })
+    }
+
+    const subnetPrefix = getIPv6Prefix(ip)
     let blocked = { ip, blockedBy: adminUsername, reason: reason || 'Manual block by admin', blockedAt: new Date() }
     let terminatedCount = 0
     let session = null
@@ -53,6 +62,12 @@ router.post('/', requireAdmin, async (req, res) => {
       try {
         const attackCount = await Attack.countDocuments({ sourceIP: ip })
         session = await Session.findOne({ ip, isActive: true })
+
+        const allAssociatedIPs = [...new Set([
+          ip,
+          ...(session?.associatedIPs || []),
+          ...(Array.isArray(associatedIPs) ? associatedIPs : [])
+        ].filter(Boolean))]
 
         const geo = resolveIPLocation(ip)
         blocked = await BlockedIP.findOneAndUpdate(
@@ -66,6 +81,10 @@ router.post('/', requireAdmin, async (req, res) => {
             expiresAt: expiresAt || null,
             country: session?.country || geo?.country || 'Unknown',
             city: session?.city || geo?.city || 'Unknown',
+            subnetPrefix,
+            associatedIPs: allAssociatedIPs,
+            hardwareHash: hardwareFingerprint || null,
+            fingerprint: fingerprint || session?.fingerprintHash || null,
             blockedAt: new Date()
           },
           { upsert: true, new: true }
@@ -84,21 +103,48 @@ router.post('/', requireAdmin, async (req, res) => {
           targetType: 'IP',
           admin: adminUsername,
           reason: reason || 'Manual block by admin',
-          details: { permanent: permanent !== false, sessionsTerminated: terminatedCount }
+          details: { permanent: permanent !== false, subnetPrefix, sessionsTerminated: terminatedCount }
         })
       } catch (e) {
         logger.warn(`[BLOCK DB WARNING] ${e.message}`)
       }
     }
 
-    // Cache blocked IP
+    // Cache blocked IP and Subnet in Redis
     await cache.set(`blocked:${ip}`, { blocked: true, reason: blocked.reason || reason || 'Manual block by admin', blockedAt: new Date() }, 86400 * 365)
+    if (subnetPrefix) {
+      await cache.set(`blocked:subnet:${subnetPrefix}`, { blocked: true, reason: blocked.reason || reason }, 86400 * 365)
+    }
+
+    // Cache hardware fingerprint and browser fingerprint
+    if (hardwareFingerprint) {
+      await cache.set(`blocked:hw:${hardwareFingerprint}`, { blocked: true, reason: blocked.reason || reason }, 86400 * 365)
+      if (mongoose.connection.readyState === 1) {
+        await BlockedFingerprint.findOneAndUpdate(
+          { hardwareFingerprint },
+          {
+            fingerprint: fingerprint || hardwareFingerprint,
+            hardwareFingerprint,
+            blockedBy: adminUsername,
+            reason: reason || 'Manual block by admin',
+            associatedIPs: [ip],
+            blockedAt: new Date()
+          },
+          { upsert: true, new: true }
+        )
+      }
+    }
+    if (fingerprint) {
+      await cache.set(`blocked:fp:${fingerprint}`, { blocked: true, reason: blocked.reason || reason }, 86400 * 365)
+    }
 
     // After saving block, find the session for this IP and broadcast directly
     if (session) {
       broadcast('session_blocked', {
         sessionId: session.sessionId,
         ip,
+        subnetPrefix,
+        hardwareFingerprint,
         username: session.username,
         reason: req.body.reason || 'Blocked by admin',
         timestamp: new Date().toISOString()
@@ -106,13 +152,15 @@ router.post('/', requireAdmin, async (req, res) => {
     }
     broadcast('ip_blocked', {
       ip,
+      subnetPrefix,
+      hardwareFingerprint,
       blockedBy: adminUsername,
       reason: blocked.reason || 'Manual block',
       sessionsTerminated: session ? 1 : terminatedCount,
       timestamp: new Date().toISOString()
     })
 
-    logger.info(`[BLOCK] IP ${ip} blocked by ${adminUsername} — reason: ${reason}`)
+    logger.info(`[BLOCK] IP ${ip} (Subnet: ${subnetPrefix || 'N/A'}) blocked by ${adminUsername} — reason: ${reason}`)
     res.json({ success: true, blocked, sessionsTerminated: terminatedCount })
   } catch (err) {
     logger.error(`Block IP error: ${err.message}`)
@@ -330,37 +378,60 @@ router.delete('/fingerprint/:fp', requireAdmin, async (req, res) => {
 router.post('/unblock-self', async (req, res) => {
   const ip = req.body?.ip || req.ip || req.connection?.remoteAddress
   const fingerprint = req.body?.fingerprint
-  logger.info(`[UNBLOCK_SELF] Self-unblock requested for IP: ${ip}, FP: ${fingerprint ? fingerprint.substr(0,8) + '...' : 'none'}`)
+  const hardwareFingerprint = req.body?.hardwareFingerprint
+  logger.info(`[UNBLOCK_SELF] Self-unblock requested for IP: ${ip}, FP: ${fingerprint ? fingerprint.substr(0,8) + '...' : 'none'}, HW: ${hardwareFingerprint ? hardwareFingerprint.substr(0,8) + '...' : 'none'}`)
 
-  const cleared = { ip: false, fingerprint: false }
+  const cleared = { ip: false, fingerprint: false, hardwareFingerprint: false }
 
   try {
     if (ip) {
+      const cleanIP = ip.replace('::ffff:', '').trim()
+      const subnetPrefix = getIPv6Prefix(cleanIP)
+      const ipQuery = [{ ip: cleanIP }]
+      if (subnetPrefix) ipQuery.push({ subnetPrefix })
+
       if (mongoose.connection.readyState === 1) {
-        await BlockedIP.deleteOne({ ip })
-        await Session.updateMany({ ip, isBlocked: true }, { isBlocked: false, unblockedAt: new Date() })
+        await BlockedIP.deleteMany({ $or: ipQuery })
+        await Session.updateMany({ ip: cleanIP, isBlocked: true }, { isBlocked: false, unblockedAt: new Date() })
       }
-      await cache.del(`blocked:${ip}`)
-      await cache.del(`fails:${ip}`)
-      await cache.del(`rapid:${ip}`)
-      broadcast('ip_unblocked', { ip, source: 'SELF_DEMO' })
+      await cache.del(`blocked:${cleanIP}`)
+      if (subnetPrefix) await cache.del(`blocked:subnet:${subnetPrefix}`)
+      await cache.del(`fails:${cleanIP}`)
+      await cache.del(`rapid:${cleanIP}`)
+      broadcast('ip_unblocked', { ip: cleanIP, source: 'SELF_DEMO' })
       cleared.ip = true
     }
 
-    if (fingerprint) {
+    if (fingerprint || hardwareFingerprint) {
+      const fpQueries = []
+      if (fingerprint) fpQueries.push({ fingerprint })
+      if (hardwareFingerprint) fpQueries.push({ hardwareFingerprint })
+
       if (mongoose.connection.readyState === 1) {
-        await BlockedFingerprint.deleteOne({ fingerprint })
+        await BlockedFingerprint.deleteMany({ $or: fpQueries })
         await Session.updateMany(
-          { $or: [{ fingerprintHash: fingerprint }, { 'fingerprint.hash': fingerprint }], isBlocked: true },
+          {
+            $or: [
+              ...(fingerprint ? [{ fingerprintHash: fingerprint }, { 'fingerprint.hash': fingerprint }] : []),
+              ...(hardwareFingerprint ? [{ hardwareFingerprint }] : [])
+            ],
+            isBlocked: true
+          },
           { isBlocked: false, unblockedAt: new Date() }
         )
       }
-      await cache.del(`blocked:fp:${fingerprint}`)
-      broadcast('fingerprint_unblocked', { fingerprint, source: 'SELF_DEMO' })
-      cleared.fingerprint = true
+      if (fingerprint) {
+        await cache.del(`blocked:fp:${fingerprint}`)
+        cleared.fingerprint = true
+      }
+      if (hardwareFingerprint) {
+        await cache.del(`blocked:hw:${hardwareFingerprint}`)
+        cleared.hardwareFingerprint = true
+      }
+      broadcast('fingerprint_unblocked', { fingerprint, hardwareFingerprint, source: 'SELF_DEMO' })
     }
 
-    broadcast('client_unblocked', { ip, fingerprint, source: 'SELF_DEMO', timestamp: new Date().toISOString() })
+    broadcast('client_unblocked', { ip, fingerprint, hardwareFingerprint, source: 'SELF_DEMO', timestamp: new Date().toISOString() })
     res.json({ success: true, cleared })
   } catch (err) {
     logger.error(`[UNBLOCK_SELF] Error: ${err.message}`)
@@ -370,19 +441,21 @@ router.post('/unblock-self', async (req, res) => {
 
 // POST /api/blocklist/unblock-client — unblock both IP and Fingerprint for this client (Admin only)
 router.post('/unblock-client', requireAdmin, async (req, res) => {
-  const { ip, fingerprint, reason } = req.body || {}
+  const { ip, fingerprint, hardwareFingerprint, reason } = req.body || {}
   const adminUsername = req.admin.username
-  if (!ip && !fingerprint) {
-    return res.status(400).json({ error: 'At least IP or fingerprint is required' })
+  if (!ip && !fingerprint && !hardwareFingerprint) {
+    return res.status(400).json({ error: 'At least IP, fingerprint, or hardwareFingerprint is required' })
   }
 
   const cleared = {
     ip: false,
     fingerprint: false,
+    hardwareFingerprint: false,
     redisBlocked: false,
     redisFails: false,
     redisRapid: false,
     redisFP: false,
+    redisHW: false,
     sessionsUpdated: 0,
     vpnExempted: false
   }
@@ -390,15 +463,21 @@ router.post('/unblock-client', requireAdmin, async (req, res) => {
 
   // 1. Clear IP if provided
   if (ip) {
+    const subnetPrefix = getIPv6Prefix(ip)
     if (mongoose.connection.readyState === 1) {
       try {
-        const delRes = await BlockedIP.deleteOne({ ip })
+        const ipQ = [{ ip }]
+        if (subnetPrefix) ipQ.push({ subnetPrefix })
+        const delRes = await BlockedIP.deleteMany({ $or: ipQ })
         cleared.ip = delRes.deletedCount > 0
       } catch (e) {
         errors.push(`MongoDB BlockedIP delete failed: ${e.message}`)
       }
     }
     try { await cache.del(`blocked:${ip}`); cleared.redisBlocked = true } catch (e) { errors.push(`Redis blocked:${ip} del failed: ${e.message}`) }
+    if (subnetPrefix) {
+      try { await cache.del(`blocked:subnet:${subnetPrefix}`) } catch {}
+    }
     try { await cache.del(`fails:${ip}`); cleared.redisFails = true } catch (e) { errors.push(`Redis fails:${ip} del failed: ${e.message}`) }
     try { await cache.del(`rapid:${ip}`); cleared.redisRapid = true } catch (e) { errors.push(`Redis rapid:${ip} del failed: ${e.message}`) }
 
@@ -441,28 +520,45 @@ router.post('/unblock-client', requireAdmin, async (req, res) => {
     }
   }
 
-  // 2. Clear Fingerprint if provided
-  if (fingerprint) {
+  // 2. Clear Fingerprint / Hardware Fingerprint if provided
+  if (fingerprint || hardwareFingerprint) {
     if (mongoose.connection.readyState === 1) {
       try {
-        const fpDel = await BlockedFingerprint.deleteOne({ fingerprint })
+        const fpQ = []
+        if (fingerprint) fpQ.push({ fingerprint })
+        if (hardwareFingerprint) fpQ.push({ hardwareFingerprint })
+        const fpDel = await BlockedFingerprint.deleteMany({ $or: fpQ })
         cleared.fingerprint = fpDel.deletedCount > 0
       } catch (e) {
         errors.push(`MongoDB BlockedFingerprint delete failed: ${e.message}`)
       }
       try {
         const fpSessRes = await Session.updateMany(
-          { $or: [{ fingerprintHash: fingerprint }, { 'fingerprint.hash': fingerprint }], isBlocked: true },
+          {
+            $or: [
+              ...(fingerprint ? [{ fingerprintHash: fingerprint }, { 'fingerprint.hash': fingerprint }] : []),
+              ...(hardwareFingerprint ? [{ hardwareFingerprint }] : [])
+            ],
+            isBlocked: true
+          },
           { isBlocked: false, unblockedAt: new Date() }
         )
         cleared.sessionsUpdated = (cleared.sessionsUpdated || 0) + fpSessRes.modifiedCount
       } catch (e) {}
     }
-    try {
-      await cache.del(`blocked:fp:${fingerprint}`)
-      cleared.redisFP = true
-    } catch (e) {
-      errors.push(`Redis blocked:fp:${fingerprint} del failed: ${e.message}`)
+    if (fingerprint) {
+      try {
+        await cache.del(`blocked:fp:${fingerprint}`)
+        cleared.redisFP = true
+      } catch (e) {
+        errors.push(`Redis blocked:fp:${fingerprint} del failed: ${e.message}`)
+      }
+    }
+    if (hardwareFingerprint) {
+      try {
+        await cache.del(`blocked:hw:${hardwareFingerprint}`)
+        cleared.redisHW = true
+      } catch (e) {}
     }
   }
 
@@ -475,19 +571,19 @@ router.post('/unblock-client', requireAdmin, async (req, res) => {
         targetType: 'CLIENT',
         admin: adminUsername,
         reason: reason || 'Full client unblock by admin',
-        details: { ip, fingerprint, cleared, errors }
+        details: { ip, fingerprint, hardwareFingerprint, cleared, errors }
       })
     } catch (e) {
       errors.push(`AuditLog write failed: ${e.message}`)
     }
   }
 
-  // 4. Targeted socket emission to both rooms
+  // 4. Targeted socket emission to rooms
   try {
     const io = req.app.get('io')
     if (io) {
-      if (ip) io.to(`ip:${ip}`).emit('client_unblocked', { type: 'CLIENT', ip, fingerprint, timestamp: new Date().toISOString() })
-      if (fingerprint) io.to(`fp:${fingerprint}`).emit('client_unblocked', { type: 'CLIENT', ip, fingerprint, timestamp: new Date().toISOString() })
+      if (ip) io.to(`ip:${ip}`).emit('client_unblocked', { type: 'CLIENT', ip, fingerprint, hardwareFingerprint, timestamp: new Date().toISOString() })
+      if (fingerprint) io.to(`fp:${fingerprint}`).emit('client_unblocked', { type: 'CLIENT', ip, fingerprint, hardwareFingerprint, timestamp: new Date().toISOString() })
     }
     if (ip) broadcast('ip_unblocked', { ip, admin: adminUsername, timestamp: new Date().toISOString() })
     if (fingerprint) broadcast('fingerprint_unblocked', { fingerprint, admin: adminUsername, timestamp: new Date().toISOString() })
@@ -563,9 +659,15 @@ if (process.env.NODE_ENV !== 'production') {
 }
 
 // GET /api/blocklist/check-status — secure, caller-only block check per C4 & C2
-// NEVER accepts arbitrary IP parameter. Returns ONLY { blocked: true } or { blocked: false } (no reason).
+// NEVER accepts arbitrary IP parameter. Returns ONLY { blocked: true } or { blocked: false }.
 router.get('/check-status', checkStatusLimiter, async (req, res) => {
   try {
+    // 0. Check admin exemption first
+    const isAdmin = await isAdminAuthenticated(req)
+    if (isAdmin) {
+      return res.json({ blocked: false, adminExempt: true })
+    }
+
     const location = detectLocation(req)
     const clientIP = location.ip || req.ip || req.connection?.remoteAddress || '127.0.0.1'
     const candidateIPs = [clientIP]
@@ -573,51 +675,19 @@ router.get('/check-status', checkStatusLimiter, async (req, res) => {
     if (rawReqIP && !candidateIPs.includes(rawReqIP)) candidateIPs.push(rawReqIP)
 
     const submittedFP = req.query.fingerprint
+    const submittedHW = req.query.hardwareFingerprint
 
-    let validFP = null
-    // C4: Ignore any fingerprint that does not match this client's active session
-    if (submittedFP && typeof submittedFP === 'string' && mongoose.connection.readyState === 1) {
-      try {
-        const activeSession = await Session.findOne({
-          ip: { $in: candidateIPs },
-          $or: [
-            { fingerprintHash: submittedFP },
-            { 'fingerprint.hash': submittedFP }
-          ]
-        })
-        if (activeSession) {
-          validFP = submittedFP
-        }
-      } catch {}
-    }
+    const result = await verifyBlockState({
+      candidateIPs,
+      fingerprint: submittedFP,
+      hardwareFingerprint: submittedHW
+    })
 
-    // Check IP block (cache first, then DB)
-    for (const tip of candidateIPs) {
-      const cachedIP = await cache.get(`blocked:${tip}`)
-      if (cachedIP?.blocked) {
-        return res.json({ blocked: true })
-      }
-    }
-    if (mongoose.connection.readyState === 1) {
-      const dbBlocked = await BlockedIP.findOne({ ip: { $in: candidateIPs } })
-      if (dbBlocked && (!dbBlocked.expiresAt || new Date() < dbBlocked.expiresAt)) {
-        return res.json({ blocked: true })
-      }
-    }
-
-    // Check Fingerprint block (validFP from active session OR directly submitted hardware fingerprint)
-    const targetFP = validFP || submittedFP
-    if (targetFP && typeof targetFP === 'string') {
-      const cachedFP = await cache.get(`blocked:fp:${targetFP}`)
-      if (cachedFP?.blocked) {
-        return res.json({ blocked: true, reason: 'FINGERPRINT_BLOCKED' })
-      }
-      if (mongoose.connection.readyState === 1) {
-        const dbFP = await BlockedFingerprint.findOne({ fingerprint: targetFP })
-        if (dbFP) {
-          return res.json({ blocked: true, reason: 'FINGERPRINT_BLOCKED' })
-        }
-      }
+    if (result.blocked) {
+      return res.json({
+        blocked: true,
+        reason: result.reason || 'PERMANENT_DEVICE_BAN'
+      })
     }
 
     return res.json({ blocked: false })

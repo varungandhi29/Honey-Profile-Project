@@ -2,6 +2,7 @@ import mongoose from 'mongoose'
 
 const blockedFingerprintSchema = new mongoose.Schema({
   fingerprint:  { type: String, required: true, unique: true, index: true },
+  hardwareFingerprint: { type: String, default: null, index: true },
   blockedBy:    { type: String, required: true },
   reason:       { type: String, default: 'Blocked by admin' },
   associatedIPs:{ type: [String], default: [] },

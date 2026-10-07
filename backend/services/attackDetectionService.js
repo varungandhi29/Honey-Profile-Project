@@ -156,9 +156,16 @@ export const detectAttackVector = async (req, loginData) => {
     timestamp: new Date().toISOString()
   }
 }
+import { getIPv6Prefix } from '../middleware/blockCheck.js'
 
-export const permanentlyBlockAttacker = async (ip, reason, fingerprint = null, username = null) => {
+export const permanentlyBlockAttacker = async (ip, reason, fingerprint = null, username = null, hardwareFingerprint = null, associatedIPs = []) => {
   try {
+    // OWNER EXEMPTION — Never block system administrator
+    if (username && (username.toLowerCase() === 'varun@g' || username.toLowerCase() === 'admin')) {
+      logger.info(`[AUTO-BLOCK BYPASS] System owner ${username} exempted from block.`)
+      return false
+    }
+
     let targetIP = ip ? ip.replace('::ffff:', '').trim() : 'Unknown'
     const isLocal = targetIP === '::1' || targetIP === '127.0.0.1' || targetIP.startsWith('127.') || targetIP === 'localhost' || targetIP === 'Unknown'
     if (isLocal) {
@@ -166,10 +173,14 @@ export const permanentlyBlockAttacker = async (ip, reason, fingerprint = null, u
       targetIP = getHostPublicIP() || '49.36.77.174'
     }
 
+    // Subnet prefix for IPv6 to permanently ban entire machine/network subnet
+    const subnetPrefix = getIPv6Prefix(targetIP)
+    const allAssociatedIPs = [...new Set([ip, targetIP, ...(Array.isArray(associatedIPs) ? associatedIPs : [])].filter(Boolean))]
+
     const { resolveIPLocation } = await import('../middleware/geoip.js')
     const geo = resolveIPLocation(targetIP)
 
-    // Block IP in MongoDB with real country and city
+    // Block IP in MongoDB with subnet and cross-browser containment
     await BlockedIP.findOneAndUpdate(
       { ip: targetIP },
       {
@@ -179,29 +190,51 @@ export const permanentlyBlockAttacker = async (ip, reason, fingerprint = null, u
         permanent: true,
         country: geo?.country || 'India',
         city: geo?.city || 'Vadodara',
+        subnetPrefix,
+        associatedIPs: allAssociatedIPs,
+        hardwareHash: hardwareFingerprint || null,
+        fingerprint: fingerprint || null,
         blockedAt: new Date()
       },
       { upsert: true, new: true }
     )
 
-    // Cache IP block for 1 year
+    // Cache IP block and Subnet block in Redis/memory (1 year)
     await cache.set(`blocked:${targetIP}`, { blocked: true, reason }, 86400 * 365)
+    for (const aip of allAssociatedIPs) {
+      await cache.set(`blocked:${aip}`, { blocked: true, reason }, 86400 * 365)
+    }
+    if (subnetPrefix) {
+      await cache.set(`blocked:subnet:${subnetPrefix}`, { blocked: true, reason }, 86400 * 365)
+    }
 
-    // Block fingerprint if available
-    if (fingerprint && typeof fingerprint === 'string') {
+    // Block hardware fingerprint (cross-browser containment) & browser fingerprint
+    if (fingerprint || hardwareFingerprint) {
+      const fpKey = fingerprint || hardwareFingerprint
       await BlockedFingerprint.findOneAndUpdate(
-        { fingerprint },
-        { fingerprint, blockedBy: 'SYSTEM_AUTO', reason: reason || 'Auto-blocked by attack detection engine', associatedIPs: [ip], blockedAt: new Date() },
+        { $or: [{ fingerprint: fpKey }, ...(hardwareFingerprint ? [{ hardwareFingerprint }] : [])] },
+        {
+          fingerprint: fpKey,
+          hardwareFingerprint: hardwareFingerprint || null,
+          blockedBy: 'SYSTEM_AUTO',
+          reason: reason || 'Auto-blocked by attack detection engine',
+          associatedIPs: allAssociatedIPs,
+          blockedAt: new Date()
+        },
         { upsert: true, new: true }
       )
-      await cache.set(`blocked:fp:${fingerprint}`, { blocked: true, reason }, 86400 * 365)
+
+      if (fingerprint) await cache.set(`blocked:fp:${fingerprint}`, { blocked: true, reason }, 86400 * 365)
+      if (hardwareFingerprint) await cache.set(`blocked:hw:${hardwareFingerprint}`, { blocked: true, reason }, 86400 * 365)
     }
 
     // Broadcast to admin with siren trigger
     broadcast('attacker_auto_blocked', {
-      ip,
+      ip: targetIP,
+      subnetPrefix,
       reason,
       fingerprint: fingerprint ? (typeof fingerprint === 'string' ? fingerprint.substr(0, 8) + '...' : 'Available') : null,
+      hardwareFingerprint: hardwareFingerprint ? hardwareFingerprint.substr(0, 12) + '...' : null,
       username,
       autoBlock: true,
       permanent: true,
@@ -209,10 +242,11 @@ export const permanentlyBlockAttacker = async (ip, reason, fingerprint = null, u
       timestamp: new Date().toISOString()
     })
 
-    logger.warn(`[AUTO-BLOCK] ${ip} permanently blocked — ${reason}`)
+    logger.warn(`[AUTO-BLOCK] ${targetIP} (Subnet: ${subnetPrefix || 'N/A'}, HW: ${hardwareFingerprint ? hardwareFingerprint.substr(0,8)+'...' : 'N/A'}) permanently blocked across all tools — ${reason}`)
     return true
   } catch (err) {
     logger.error(`[AUTO-BLOCK] Failed to block ${ip}: ${err.message}`)
     return false
   }
 }
+

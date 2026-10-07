@@ -15,6 +15,7 @@ import { cache } from '../services/cacheService.js'
 import logger from '../middleware/logger.js'
 import { encrypt } from '../services/dataVaultService.js'
 import { resolveIPLocation } from '../middleware/geoip.js'
+import { verifyBlockState } from '../middleware/blockCheck.js'
 
 const router = express.Router()
 
@@ -22,7 +23,7 @@ const router = express.Router()
 router.post('/login', async (req, res) => {
   let ip = req.body?.ip || req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || req.connection?.remoteAddress || 'Unknown'
   ip = ip.replace('::ffff:', '').trim()
-  let { username, password, fingerprint, lat, lng, country, city, browser, os } = req.body || {}
+  let { username, password, fingerprint, hardwareFingerprint, associatedIPs, lat, lng, country, city, browser, os } = req.body || {}
 
   const isLocal = ip === '::1' || ip === '127.0.0.1' || ip.startsWith('127.') || ip === 'localhost' || ip === 'Unknown'
   if (isLocal) {
@@ -44,37 +45,20 @@ router.post('/login', async (req, res) => {
 
   logger.info(`[HONEYPOT LOGIN] Attempt: ${username || 'anonymous'} from ${ip}`)
 
-  // STEP 1 — Check if already blocked (IP or persistent hardware Fingerprint)
-  const ipBlocked = await cache.get(`blocked:${ip}`)
-  if (ipBlocked?.blocked) {
+  // STEP 1 — Check if already blocked across IP, IPv6 subnet, or hardware fingerprint
+  const candidateIPs = [ip, ...(Array.isArray(associatedIPs) ? associatedIPs : [])]
+  const blockResult = await verifyBlockState({ candidateIPs, fingerprint, hardwareFingerprint })
+  if (blockResult.blocked) {
     broadcast('blocked_attempt', {
       ip,
       username,
-      method: 'IP_BLOCK',
-      message: `Previously blocked IP ${ip} tried to login as ${username}`,
+      method: blockResult.method,
+      reason: blockResult.reason,
+      matchedTarget: blockResult.matchedTarget,
+      message: `Blocked adversary (${blockResult.reason}) tried to login as ${username} from ${ip}`,
       timestamp: new Date().toISOString()
     })
-    return res.status(403).json({ error: 'Blocked', blocked: true, reason: 'IP_BLOCKED' })
-  }
-
-  if (fingerprint) {
-    const fpBlocked = await cache.get(`blocked:fp:${fingerprint}`)
-    let isFpBlocked = fpBlocked?.blocked
-    if (!isFpBlocked && mongoose.connection.readyState === 1) {
-      const dbFp = await BlockedFingerprint.findOne({ fingerprint })
-      if (dbFp) isFpBlocked = true
-    }
-    if (isFpBlocked) {
-      broadcast('blocked_attempt', {
-        ip,
-        fingerprint,
-        username,
-        method: 'FINGERPRINT_BLOCK',
-        message: `Blocked hardware fingerprint tried to login as ${username} from ${ip}`,
-        timestamp: new Date().toISOString()
-      })
-      return res.status(403).json({ error: 'Blocked', blocked: true, reason: 'FINGERPRINT_BLOCKED' })
-    }
+    return res.status(403).json({ error: 'Access denied: Permanently blocked across all tools and software', blocked: true, reason: blockResult.reason })
   }
 
   const cleanU = (username || '').trim().toLowerCase()
@@ -154,7 +138,7 @@ router.post('/login', async (req, res) => {
 
   if (detection.autoBlock && !isAttackerDemo) {
     // Auto-block immediately — brute force, VPN, attack tool, etc.
-    await permanentlyBlockAttacker(ip, detection.blockReason, fingerprint, username)
+    await permanentlyBlockAttacker(ip, detection.blockReason, fingerprint, username, hardwareFingerprint, associatedIPs)
 
     // Log the attack
     const attack = await Attack.create({
