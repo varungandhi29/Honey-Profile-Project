@@ -374,69 +374,13 @@ router.delete('/fingerprint/:fp', requireAdmin, async (req, res) => {
   })
 })
 
-// POST /api/blocklist/unblock-self — self-service unblock for testing/demo clients
+// POST /api/blocklist/unblock-self — strictly disabled to prevent attackers from bypassing containment
 router.post('/unblock-self', async (req, res) => {
-  const ip = req.body?.ip || req.ip || req.connection?.remoteAddress
-  const fingerprint = req.body?.fingerprint
-  const hardwareFingerprint = req.body?.hardwareFingerprint
-  logger.info(`[UNBLOCK_SELF] Self-unblock requested for IP: ${ip}, FP: ${fingerprint ? fingerprint.substr(0,8) + '...' : 'none'}, HW: ${hardwareFingerprint ? hardwareFingerprint.substr(0,8) + '...' : 'none'}`)
-
-  const cleared = { ip: false, fingerprint: false, hardwareFingerprint: false }
-
-  try {
-    if (ip) {
-      const cleanIP = ip.replace('::ffff:', '').trim()
-      const subnetPrefix = getIPv6Prefix(cleanIP)
-      const ipQuery = [{ ip: cleanIP }]
-      if (subnetPrefix) ipQuery.push({ subnetPrefix })
-
-      if (mongoose.connection.readyState === 1) {
-        await BlockedIP.deleteMany({ $or: ipQuery })
-        await Session.updateMany({ ip: cleanIP, isBlocked: true }, { isBlocked: false, unblockedAt: new Date() })
-      }
-      await cache.del(`blocked:${cleanIP}`)
-      if (subnetPrefix) await cache.del(`blocked:subnet:${subnetPrefix}`)
-      await cache.del(`fails:${cleanIP}`)
-      await cache.del(`rapid:${cleanIP}`)
-      broadcast('ip_unblocked', { ip: cleanIP, source: 'SELF_DEMO' })
-      cleared.ip = true
-    }
-
-    if (fingerprint || hardwareFingerprint) {
-      const fpQueries = []
-      if (fingerprint) fpQueries.push({ fingerprint })
-      if (hardwareFingerprint) fpQueries.push({ hardwareFingerprint })
-
-      if (mongoose.connection.readyState === 1) {
-        await BlockedFingerprint.deleteMany({ $or: fpQueries })
-        await Session.updateMany(
-          {
-            $or: [
-              ...(fingerprint ? [{ fingerprintHash: fingerprint }, { 'fingerprint.hash': fingerprint }] : []),
-              ...(hardwareFingerprint ? [{ hardwareFingerprint }] : [])
-            ],
-            isBlocked: true
-          },
-          { isBlocked: false, unblockedAt: new Date() }
-        )
-      }
-      if (fingerprint) {
-        await cache.del(`blocked:fp:${fingerprint}`)
-        cleared.fingerprint = true
-      }
-      if (hardwareFingerprint) {
-        await cache.del(`blocked:hw:${hardwareFingerprint}`)
-        cleared.hardwareFingerprint = true
-      }
-      broadcast('fingerprint_unblocked', { fingerprint, hardwareFingerprint, source: 'SELF_DEMO' })
-    }
-
-    broadcast('client_unblocked', { ip, fingerprint, hardwareFingerprint, source: 'SELF_DEMO', timestamp: new Date().toISOString() })
-    res.json({ success: true, cleared })
-  } catch (err) {
-    logger.error(`[UNBLOCK_SELF] Error: ${err.message}`)
-    res.status(500).json({ error: err.message })
-  }
+  logger.warn(`[UNBLOCK_SELF REJECTED] Adversary attempted self-unblock from IP: ${req.ip}`)
+  return res.status(403).json({
+    error: 'Access denied: Self-unblocking is permanently prohibited. Containment is enforced across all tools and software.',
+    blocked: true
+  })
 })
 
 // POST /api/blocklist/unblock-client — unblock both IP and Fingerprint for this client (Admin only)

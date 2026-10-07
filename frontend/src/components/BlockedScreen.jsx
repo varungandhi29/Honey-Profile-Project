@@ -34,6 +34,34 @@ export default function BlockedScreen({ reason, session, honeyCount = 4, onUnblo
   const [ownerPassword, setOwnerPassword] = useState('')
   const [ownerLoading, setOwnerLoading] = useState(false)
   const [ownerError, setOwnerError] = useState('')
+  const [skullClicks, setSkullClicks] = useState(0)
+
+  // Stealth trigger for System Owner: Ctrl + Shift + U
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'U' || e.key === 'u')) {
+        e.preventDefault()
+        setOwnerModalOpen(prev => !prev)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
+
+  // Stealth click on Skull: 3 rapid clicks within 2s opens owner modal
+  const handleSkullClick = () => {
+    setSkullClicks(prev => {
+      const next = prev + 1
+      if (next >= 3) {
+        setOwnerModalOpen(true)
+        return 0
+      }
+      return next
+    })
+    setTimeout(() => {
+      setSkullClicks(0)
+    }, 2000)
+  }
 
   const handleOwnerUnblock = async (e) => {
     if (e) e.preventDefault()
@@ -333,7 +361,11 @@ export default function BlockedScreen({ reason, session, honeyCount = 4, onUnblo
           gap: '10px'
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <span style={{ animation: 'blink 1.2s infinite', display: 'flex', alignItems: 'center' }}>
+            <span
+              onClick={handleSkullClick}
+              title=""
+              style={{ animation: 'blink 1.2s infinite', display: 'flex', alignItems: 'center', cursor: 'pointer', userSelect: 'none' }}
+            >
               <Skull size={20} color="#FF1744" />
             </span>
             <span style={{ color: '#FF5252', fontWeight: 800, letterSpacing: '1.5px', fontSize: '13px' }}>
@@ -683,86 +715,6 @@ export default function BlockedScreen({ reason, session, honeyCount = 4, onUnblo
           </div>
 
           <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-            {/* SYSTEM OWNER UNBLOCK BUTTON */}
-            <button
-              onClick={() => setOwnerModalOpen(true)}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                padding: '9px 16px',
-                background: 'rgba(255, 193, 7, 0.15)',
-                border: '1px solid #FFC107',
-                borderRadius: '6px',
-                color: '#FFD54F',
-                fontWeight: 800,
-                fontSize: '12px',
-                cursor: 'pointer',
-                fontFamily: 'inherit',
-                transition: 'all 0.2s ease'
-              }}
-            >
-              👑 SYSTEM OWNER UNBLOCK
-            </button>
-
-            <button
-              onClick={async (e) => {
-                const btn = e.currentTarget
-                btn.disabled = true
-                btn.innerText = '⏳ UNBLOCKING...'
-                try {
-                  const res = await fetch(`${BACKEND}/api/blocklist/unblock-self`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                      ip: forensics.ip,
-                      fingerprint: forensics.fingerprint,
-                      hardwareFingerprint: forensics.hardwareFingerprint
-                    })
-                  })
-                  if (res.ok) {
-                    try {
-                      localStorage.removeItem('honeyshield_blocked')
-                      localStorage.removeItem('honeyshield_blocked_ips')
-                      sessionStorage.removeItem('honeyshield_blocked')
-                    } catch {}
-                    if (onUnblocked) {
-                      onUnblocked({ ip: forensics.ip, timestamp: new Date().toISOString() })
-                    } else {
-                      window.location.reload()
-                    }
-                    return
-                  } else {
-                    const errData = await res.json().catch(() => ({}))
-                    btn.disabled = false
-                    btn.innerText = res.status === 429 ? '⏳ RATE LIMITED (429)' : '⚠️ UNBLOCK FAILED'
-                    alert(errData.error || `Unblock failed with HTTP ${res.status}. Access remains restricted.`)
-                  }
-                } catch (err) {
-                  btn.disabled = false
-                  btn.innerText = '⚠️ NETWORK ERROR'
-                  alert('Unable to reach authentication server. Access remains restricted.')
-                }
-              }}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                padding: '9px 16px',
-                background: 'rgba(0, 230, 118, 0.15)',
-                border: '1px solid #00E676',
-                borderRadius: '6px',
-                color: '#00E676',
-                fontWeight: 700,
-                fontSize: '12px',
-                cursor: 'pointer',
-                fontFamily: 'inherit',
-                transition: 'all 0.2s ease'
-              }}
-            >
-              🔄 RESET / UNBLOCK (DEMO)
-            </button>
-
             <button
               onClick={handleDownloadDossier}
               style={{
