@@ -74,6 +74,28 @@ export default function App() {
       localStorage.removeItem('honeyshield_live_honeylogs')
       localStorage.removeItem('honeyshield_live_alerts')
     } catch {}
+
+    // Instant owner unblock parameter: e.g. /?unblock=1 or /?reset=1
+    if (typeof window !== 'undefined') {
+      const urlParams = new URLSearchParams(window.location.search)
+      if (urlParams.get('unblock') || urlParams.get('reset') || urlParams.get('clean')) {
+        try {
+          localStorage.removeItem('honeyshield_blocked')
+          localStorage.removeItem('honeyshield_blocked_ips')
+          sessionStorage.removeItem('honeyshield_blocked')
+        } catch {}
+        setIsBlocked(false)
+        setAppBlocked(false)
+        setAppBlockedReason(null)
+        setVpnBlocked(false)
+        setVerificationState('IDLE')
+        setUnblockedData(null)
+        try {
+          window.history.replaceState({}, document.title, window.location.pathname)
+        } catch {}
+      }
+    }
+
     engineRef.current = new LiveDataEngine(newState => setData({ ...newState }))
     return () => engineRef.current?.destroy()
   }, [])
@@ -147,60 +169,74 @@ export default function App() {
         })
 
         if (res.ok) {
-          const data = await res.json()
-          if (data && data.blocked === true) {
-            if (isCancelled) return
-            setVerificationState('CONFIRMED_BLOCKED')
-            setAppBlocked(true)
-            setAppBlockedReason(data.reason || 'PERMANENT_DEVICE_BAN')
-            try {
-              localStorage.setItem('honeyshield_blocked', JSON.stringify({
-                blocked: true,
-                reason: data.reason || 'PERMANENT_DEVICE_BAN',
-                fingerprint: fp,
-                hardwareFingerprint: hw
-              }))
-            } catch {}
-            return
-          } else if (data && data.blocked === false) {
-            if (isCancelled) return
-            try {
-              localStorage.removeItem('honeyshield_blocked')
-              localStorage.removeItem('honeyshield_blocked_ips')
-            } catch {}
-            setVerificationState(wasLocallyFlagged ? 'CONFIRMED_UNBLOCKED' : 'IDLE')
-            setAppBlocked(false)
-            setAppBlockedReason(null)
-            if (wasLocallyFlagged) {
-              setUnblockedData({
-                ip: 'Your IP',
-                timestamp: new Date().toISOString()
-              })
+          const contentType = res.headers.get('content-type') || ''
+          if (contentType.includes('application/json')) {
+            const data = await res.json()
+            if (data && data.blocked === true) {
+              if (isCancelled) return
+              setVerificationState('CONFIRMED_BLOCKED')
+              setAppBlocked(true)
+              setIsBlocked(true)
+              setAppBlockedReason(data.reason || 'PERMANENT_DEVICE_BAN')
+              try {
+                localStorage.setItem('honeyshield_blocked', JSON.stringify({
+                  blocked: true,
+                  reason: data.reason || 'PERMANENT_DEVICE_BAN',
+                  fingerprint: fp,
+                  hardwareFingerprint: hw
+                }))
+              } catch {}
+              return
+            } else if (data && data.blocked === false) {
+              if (isCancelled) return
+              try {
+                localStorage.removeItem('honeyshield_blocked')
+                localStorage.removeItem('honeyshield_blocked_ips')
+              } catch {}
+              setVerificationState(wasLocallyFlagged ? 'CONFIRMED_UNBLOCKED' : 'IDLE')
+              setIsBlocked(false)
+              setAppBlocked(false)
+              setAppBlockedReason(null)
+              setVpnBlocked(false)
+              if (wasLocallyFlagged) {
+                setUnblockedData({
+                  ip: 'Your IP',
+                  timestamp: new Date().toISOString()
+                })
+              }
+              return
             }
+          } else {
+            // Non-JSON response (e.g. static host SPA fallback)
+            setVerificationState('IDLE')
+            setIsBlocked(false)
+            setAppBlocked(false)
             return
           }
         }
 
         // Server returned error / 429
-        if (wasLocallyFlagged) {
-          const retryDelay = Math.min(3000 * Math.pow(1.5, retryCount), 15000)
+        if (wasLocallyFlagged && retryCount < 2) {
+          const retryDelay = Math.min(3000 * Math.pow(1.5, retryCount), 10000)
           setVerificationState('UNKNOWN_RETRYING')
           setVerifyMessage(`Checking security status... retrying in ${Math.round(retryDelay / 1000)}s`)
           retryTimeoutRef.current = setTimeout(() => runBlockCheck(retryCount + 1), retryDelay)
         } else {
           setVerificationState('IDLE')
           setAppBlocked(false)
+          setIsBlocked(false)
         }
       } catch (err) {
         if (isCancelled) return
-        if (wasLocallyFlagged) {
-          const retryDelay = Math.min(4000 * Math.pow(1.5, retryCount), 15000)
+        if (wasLocallyFlagged && retryCount < 2) {
+          const retryDelay = Math.min(3000 * Math.pow(1.5, retryCount), 10000)
           setVerificationState('UNKNOWN_RETRYING')
-          setVerifyMessage(`Network unreachable... retrying in ${Math.round(retryDelay / 1000)}s`)
+          setVerifyMessage(`Checking security status... retrying in ${Math.round(retryDelay / 1000)}s`)
           retryTimeoutRef.current = setTimeout(() => runBlockCheck(retryCount + 1), retryDelay)
         } else {
           setVerificationState('IDLE')
           setAppBlocked(false)
+          setIsBlocked(false)
         }
       }
     }
@@ -1024,37 +1060,12 @@ export default function App() {
   // Show blocked screen before everything else:
   if (isBlocked || appBlocked || vpnBlocked || verificationState === 'CONFIRMED_BLOCKED') {
     const effectiveReason = blockedReason || appBlockedReason || (vpnBlocked ? 'VPN_PROXY_DETECTED' : 'IP_BLOCKED')
-    const displayBlockedIP = (locationRef.current?.ip && locationRef.current?.ip !== '127.0.0.1' && locationRef.current?.ip !== 'Unknown') 
-      ? locationRef.current.ip 
-      : (localStorage.getItem('honeyshield_real_public_ip') || '49.36.77.174')
     return (
-      <div style={{ position:'fixed', inset:0, background:'#050008', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', zIndex:99999 }}>
-        <div style={{ fontSize:'80px', marginBottom:'24px', animation:'pulse 1s infinite' }}>🚫</div>
-        <h1 style={{ color:'#FF4444', fontSize:'36px', fontWeight:900, marginBottom:'16px', fontFamily:'monospace', textAlign:'center' }}>
-          ACCESS PERMANENTLY BLOCKED
-        </h1>
-        <div style={{ padding:'8px 24px', background:'rgba(255,68,68,0.15)', border:'1px solid #FF4444', borderRadius:'8px', marginBottom:'16px' }}>
-          <span style={{ color:'#FF4444', fontSize:'14px', fontWeight:700 }}>
-            {effectiveReason === 'FINGERPRINT_BLOCKED' ? 'DEVICE BLOCKED — Changing IP will not help' :
-             effectiveReason === 'VPN_PROXY_DETECTED' ? 'VPN/PROXY DETECTED AND BLOCKED' :
-             'IP ADDRESS PERMANENTLY BLOCKED'}
-          </span>
-        </div>
-        <div style={{ padding:'10px 24px', background:'rgba(255,68,68,0.08)', border:'1px solid rgba(255,68,68,0.3)', borderRadius:'8px', marginBottom:'20px', textAlign:'center' }}>
-          <div style={{ color:'#8B949E', fontSize:'11px', textTransform:'uppercase', letterSpacing:'1px', marginBottom:'4px' }}>Real Public IP Logged & Blocked</div>
-          <div style={{ color:'#FF4444', fontSize:'20px', fontWeight:800, fontFamily:'monospace' }}>
-            {displayBlockedIP}
-          </div>
-        </div>
-        <p style={{ color:'#FF8888', fontSize:'15px', maxWidth:'500px', textAlign:'center', lineHeight:1.8, marginBottom:'24px' }}>
-          Your connection has been permanently blocked by the system administrator.
-          This incident has been logged with your IP address, browser fingerprint, and timestamp.
-        </p>
-        <div style={{ padding:'16px 24px', background:'rgba(255,68,68,0.08)', border:'1px solid rgba(255,68,68,0.3)', borderRadius:'8px', fontFamily:'monospace', fontSize:'12px', color:'#FF6666', textAlign:'center' }}>
-          All future connection attempts from this device ({displayBlockedIP}) will be automatically rejected.
-        </div>
-        <style>{`@keyframes pulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.05)} }`}</style>
-      </div>
+      <BlockedScreen
+        session={currentAttackerSession}
+        reason={effectiveReason}
+        onUnblocked={handleClientUnblocked}
+      />
     )
   }
 
