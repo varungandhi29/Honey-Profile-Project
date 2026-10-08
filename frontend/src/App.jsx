@@ -38,12 +38,7 @@ export default function App() {
   const [unblockedData, setUnblockedData] = useState(null)
   const [appBlocked, setAppBlocked] = useState(false)
   const [appBlockedReason, setAppBlockedReason] = useState(null)
-  const [verificationState, setVerificationState] = useState(() => {
-    try {
-      const saved = localStorage.getItem('honeyshield_blocked')
-      return (saved && JSON.parse(saved)?.blocked === true) ? 'CHECKING' : 'IDLE'
-    } catch { return 'IDLE' }
-  })
+  const [verificationState, setVerificationState] = useState('IDLE')
   const [verifyMessage, setVerifyMessage] = useState('')
   const retryTimeoutRef = useRef(null)
   const checkPersistentBlockRef = useRef(null)
@@ -193,17 +188,12 @@ export default function App() {
                 localStorage.removeItem('honeyshield_blocked')
                 localStorage.removeItem('honeyshield_blocked_ips')
               } catch {}
-              setVerificationState(wasLocallyFlagged ? 'CONFIRMED_UNBLOCKED' : 'IDLE')
+              setVerificationState('IDLE')
               setIsBlocked(false)
               setAppBlocked(false)
               setAppBlockedReason(null)
               setVpnBlocked(false)
-              if (wasLocallyFlagged) {
-                setUnblockedData({
-                  ip: 'Your IP',
-                  timestamp: new Date().toISOString()
-                })
-              }
+              setUnblockedData(null)
               return
             }
           } else {

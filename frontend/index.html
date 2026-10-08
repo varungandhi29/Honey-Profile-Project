@@ -10,6 +10,11 @@
           for (var r of registrations) { r.unregister(); }
         });
       }
+      try {
+        localStorage.removeItem('honeyshield_blocked');
+        localStorage.removeItem('honeyshield_blocked_ips');
+        sessionStorage.removeItem('honeyshield_blocked');
+      } catch (e) {}
     </script>
   </head>
   <body>
