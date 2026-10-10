@@ -138,18 +138,17 @@ router.post('/', requireAdmin, async (req, res) => {
       await cache.set(`blocked:fp:${fingerprint}`, { blocked: true, reason: blocked.reason || reason }, 86400 * 365)
     }
 
-    // After saving block, find the session for this IP and broadcast directly
-    if (session) {
-      broadcast('session_blocked', {
-        sessionId: session.sessionId,
-        ip,
-        subnetPrefix,
-        hardwareFingerprint,
-        username: session.username,
-        reason: req.body.reason || 'Blocked by admin',
-        timestamp: new Date().toISOString()
-      })
-    }
+    // After saving block, broadcast session_blocked immediately to enforce real-time block
+    const sessionToNotify = session || await Session.findOne({ ip, isActive: true }).catch(() => null)
+    broadcast('session_blocked', {
+      sessionId: sessionToNotify?.sessionId,
+      ip,
+      subnetPrefix,
+      hardwareFingerprint,
+      username: sessionToNotify?.username,
+      reason: req.body.reason || 'Blocked by admin',
+      timestamp: new Date().toISOString()
+    })
     broadcast('ip_blocked', {
       ip,
       subnetPrefix,

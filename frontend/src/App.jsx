@@ -10,6 +10,7 @@ import LoginPage from './pages/LoginPage'
 import AdminDashboard from './pages/AdminDashboard'
 import DeceptionDashboard from './pages/DeceptionDashboard'
 import UserDashboard from './pages/UserDashboard'
+import RealUserPortal from './components/RealUserPortal'
 import BlockedScreen from './components/BlockedScreen'
 import UnblockedScreen from './components/UnblockedScreen'
 import VerifyingScreen from './components/VerifyingScreen'
@@ -312,6 +313,7 @@ export default function App() {
   const { connected: socketConnected, latency } = useSocket({
     sessionIdRef,
     locationRef,
+    currentUserRef,
     onBlocked: handleBlocked,
     addToast,
     onAttack: (data) => {
@@ -442,90 +444,45 @@ export default function App() {
   const getRealLocation = useCallback(async () => {
     const APIs = [
       {
-        url: 'https://ipwho.is/',
-        parse: d => (d && d.success !== false && d.ip) ? ({
-          ip: d.ip,
-          city: d.city,
-          country: d.country,
-          region: d.region,
-          lat: d.latitude,
-          lng: d.longitude,
-          isp: d.connection?.isp || d.connection?.org,
-          timezone: d.timezone?.id
-        }) : null
-      },
-      {
         url: 'https://ipapi.co/json/',
-        parse: d => (d && !d.error && d.ip) ? ({
-          ip: d.ip,
-          city: d.city,
-          country: d.country_name,
-          region: d.region,
-          lat: d.latitude,
-          lng: d.longitude,
-          isp: d.org,
-          timezone: d.timezone
-        }) : null
+        parse: d => ({ ip: d.ip, city: d.city, country: d.country_name, region: d.region, lat: d.latitude, lng: d.longitude, isp: d.org, timezone: d.timezone })
       },
       {
-        url: 'https://freeipapi.com/api/json',
-        parse: d => (d && d.ipAddress) ? ({
-          ip: d.ipAddress,
-          city: d.cityName,
-          country: d.countryName,
-          region: d.regionName,
-          lat: d.latitude,
-          lng: d.longitude,
-          isp: 'ISP',
-          timezone: d.timeZone
-        }) : null
-      }
+        url: 'https://ipwho.is/',
+        parse: d => d.success ? ({ ip: d.ip, city: d.city, country: d.country, region: d.region, lat: d.latitude, lng: d.longitude, isp: d.connection?.isp, timezone: d.timezone?.id }) : null
+      },
+      {
+        url: 'http://ip-api.com/json/?fields=status,country,regionName,city,lat,lon,isp,query,timezone',
+        parse: d => d.status === 'success' ? ({ ip: d.query, city: d.city, country: d.country, region: d.regionName, lat: d.lat, lng: d.lon, isp: d.isp, timezone: d.timezone }) : null
+      },
     ]
 
     for (const api of APIs) {
       try {
-        const res = await fetch(api.url, { signal: AbortSignal.timeout(4000) })
+        const controller = new AbortController()
+        const timeout = setTimeout(() => controller.abort(), 5000)
+        const res = await fetch(api.url, { signal: controller.signal })
+        clearTimeout(timeout)
         if (!res.ok) continue
         const data = await res.json()
         const parsed = api.parse(data)
-        if (!parsed || !parsed.ip) continue
+        if (!parsed) continue
         const lat = parseFloat(parsed.lat) || 0
         const lng = parseFloat(parsed.lng) || 0
-
-        let city = parsed.city || 'Unknown'
-        const region = parsed.region || ''
-        const country = parsed.country || 'Unknown'
-        const isGujarat = region.toLowerCase().includes('gujarat') || 
-                          (country.toLowerCase().includes('india') && (region.toLowerCase().includes('gujarat') || !region))
-
-        // Fix ISP routing misclassifying Vadodara as Anand for Gujarat ISP gateways ONLY
-        if (city.toLowerCase() === 'anand' && isGujarat) {
-          city = 'Vadodara'
-        }
-
-        const isLocalVadodara = city === 'Vadodara' && (isGujarat || country === 'India')
-        const finalLat = isLocalVadodara && (lat === 0 || lat > 22.5) ? 22.3072 : lat
-        const finalLng = isLocalVadodara && (lng === 0 || lng < 73.0) ? 73.1812 : lng
-
-        const cleanIP = parsed.ip.trim()
-        if (cleanIP && cleanIP !== '127.0.0.1' && cleanIP !== '::1' && cleanIP !== 'Unknown') {
-          try { localStorage.setItem('honeyshield_real_public_ip', cleanIP) } catch {}
-        }
-
+        if (lat === 0 && lng === 0) continue
         const result = {
-          ip: cleanIP,
-          city: city,
-          country: country,
-          region: region,
-          lat: finalLat,
-          lng: finalLng,
+          ip: parsed.ip || 'Unknown',
+          city: (parsed.city?.toLowerCase() === 'anand' || !parsed.city) ? 'Vadodara' : parsed.city,
+          country: parsed.country || 'Unknown',
+          region: parsed.region || '',
+          lat, lng,
           isp: parsed.isp || 'Unknown',
-          timezone: parsed.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+          timezone: parsed.timezone || 'Asia/Kolkata',
           browser: navigator.userAgent.includes('Chrome') ? 'Chrome' : navigator.userAgent.includes('Firefox') ? 'Firefox' : navigator.userAgent.includes('Safari') ? 'Safari' : 'Browser',
-          os: navigator.platform?.includes('Win') ? 'Windows' : navigator.platform?.includes('Mac') ? 'macOS' : navigator.platform?.includes('Linux') ? 'Linux' : 'Unknown',
+          os: navigator.platform?.includes('Win') ? 'Windows' : navigator.platform?.includes('Mac') ? 'macOS' : 'Linux',
           device: /Mobi|Android/i.test(navigator.userAgent) ? 'Mobile' : 'Desktop'
         }
-        console.log(`[LOCATION] Real public IP detected: ${result.ip} → ${result.city}, ${result.country}`)
+        console.log(`[LOCATION] ${api.url} → ${result.city}, ${result.country} [${lat}, ${lng}]`)
         locationRef.current = result
         return result
       } catch (err) {
@@ -533,41 +490,11 @@ export default function App() {
       }
     }
 
-    // Try backend /api/session/init fallback
-    try {
-      const bRes = await fetch(`${BACKEND}/api/session/init`, { signal: AbortSignal.timeout(3000) })
-      if (bRes.ok) {
-        const bData = await bRes.json()
-        if (bData && bData.ip && bData.ip !== 'Unknown') {
-          const cleanIP = bData.ip.trim()
-          try { localStorage.setItem('honeyshield_real_public_ip', cleanIP) } catch {}
-          const bResult = {
-            ip: cleanIP,
-            city: bData.city || 'Vadodara',
-            country: bData.country || 'India',
-            region: bData.region || 'Gujarat',
-            lat: parseFloat(bData.lat) || 22.3072,
-            lng: parseFloat(bData.lng) || 73.1812,
-            isp: bData.isp || 'Reliance Jio Infocomm Limited',
-            timezone: bData.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Kolkata',
-            browser: bData.browser || 'Browser',
-            os: bData.os || 'Unknown',
-            device: bData.device || 'Desktop'
-          }
-          console.log(`[LOCATION] Backend init real IP → ${bResult.ip} (${bResult.city}, ${bResult.country})`)
-          locationRef.current = bResult
-          return bResult
-        }
-      }
-    } catch {}
-
-    // Final fallback: Always use real cached public IP
-    const cachedRealIP = localStorage.getItem('honeyshield_real_public_ip') || '49.36.77.174'
+    console.warn('[LOCATION] All APIs failed — using Vadodara fallback')
     const fallback = {
-      ip: cachedRealIP,
-      city: 'Vadodara', country: 'India',
+      ip: 'Unknown', city: 'Vadodara', country: 'India',
       region: 'Gujarat', lat: 22.3072, lng: 73.1812,
-      isp: 'Reliance Jio Infocomm Limited', timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Kolkata',
+      isp: 'Unknown', timezone: 'Asia/Kolkata',
       browser: 'Browser', os: 'Unknown', device: 'Desktop'
     }
     locationRef.current = fallback
@@ -598,51 +525,56 @@ export default function App() {
 
     // If backend is online, attempt live backend authentication
     if (backendOnline) {
-      try {
-        const res = await fetch(`${BACKEND}/api/auth/admin-login`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            username: credentials.username,
-            password: credentials.password,
-            fingerprint,
-            hardwareFingerprint,
-            ip: location?.ip
+      // 1. Admin login route
+      const cleanUser = credentials.username?.trim().toLowerCase()
+      if (cleanUser === 'admin' || cleanUser === 'varun@g') {
+        try {
+          const res = await fetch(`${BACKEND}/api/auth/admin-login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              username: credentials.username,
+              password: credentials.password,
+              fingerprint,
+              hardwareFingerprint,
+              ip: location?.ip
+            })
           })
-        })
-        const data = await res.json()
-        if (res.ok && data.success && data.token) {
-          sessionStorage.setItem('honeyshield_admin_token', data.token)
-          try {
-            localStorage.removeItem('honeyshield_blocked')
-            localStorage.removeItem('honeyshield_blocked_ips')
-          } catch {}
-          setIsBlocked(false)
-          setAppBlocked(false)
-          setVerificationState('IDLE')
-          const adminUser = { ...data.user, role: 'ADMIN', isAdmin: true }
-          setCurrentUser(adminUser)
-          sessionIdRef.current = `ADMIN-${Date.now()}`
-          addToast('Welcome System Owner!', 'success')
-          return
-        } else if (res.status === 401 && data.isAdminUser) {
-          setLoginError('Invalid admin credentials')
-          return
-        } else if (!res.ok && res.status !== 401) {
-          setLoginError(data.error || 'Authentication error')
-          return
+          const data = await res.json()
+          if (res.ok && data.success && data.token) {
+            sessionStorage.setItem('honeyshield_admin_token', data.token)
+            try {
+              localStorage.removeItem('honeyshield_blocked')
+              localStorage.removeItem('honeyshield_blocked_ips')
+            } catch {}
+            setIsBlocked(false)
+            setAppBlocked(false)
+            setVerificationState('IDLE')
+            const adminUser = { ...data.user, role: 'ADMIN', isAdmin: true }
+            setCurrentUser(adminUser)
+            sessionIdRef.current = `ADMIN-${Date.now()}`
+            addToast('Welcome System Owner!', 'success')
+            return
+          } else if (res.status === 401 && data.isAdminUser) {
+            setLoginError('Invalid admin credentials')
+            return
+          } else if (!res.ok && res.status !== 401) {
+            setLoginError(data.error || 'Authentication error')
+            return
+          }
+        } catch (err) {
+          console.warn('[ADMIN LOGIN] Backend unavailable, continuing:', err.message)
         }
-      } catch (err) {
-        console.warn('[ADMIN LOGIN] Backend unavailable, falling back to local auth:', err.message)
       }
 
+      // 2. All user / attacker registrations go through /api/session/register
       const realPublicIP = (location.ip && location.ip !== '127.0.0.1' && location.ip !== 'Unknown') 
         ? location.ip 
         : (localStorage.getItem('honeyshield_real_public_ip') || '49.36.77.174')
 
       const isIndiaLoc = location.country === 'India'
       const loginData = {
-        username: credentials.username,
+        username: credentials.username?.trim(),
         password: credentials.password,
         fingerprint,
         hardwareFingerprint,
@@ -657,151 +589,159 @@ export default function App() {
       }
 
       try {
-        const res = await fetch(`${BACKEND}/api/honeypot/login`, {
+        const res = await fetch(`${BACKEND}/api/session/register`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            ...(fingerprint ? { 'x-fingerprint': fingerprint } : {})
+          },
           body: JSON.stringify(loginData)
         })
-        const data = await res.json()
+        const data = await res.json().catch(() => ({}))
 
         if (res.status === 403 || data.blocked) {
-          setVpnInfo({ ip: realPublicIP, label: data.reason || 'Attack Detected' })
+          if (data.reason === 'VPN_PROXY_DETECTED') {
+            setVpnInfo({ ip: realPublicIP, label: data.label || 'VPN / Datacenter IP' })
+            setVpnBlocked(true)
+            alertEngine.playVPNDetected()
+          } else {
+            alertEngine.playBlocked()
+          }
           handleBlocked(data.reason || 'IP_BLOCKED')
-          alertEngine.playCritical()
           return
         }
 
         if (res.status === 401) {
-          const allUsers = getUsers()
-          const cleanUsername = credentials.username?.trim().toLowerCase()
-          const cleanPassword = credentials.password?.trim()
-          const localMatch = allUsers.find(u => u.username.toLowerCase() === cleanUsername && u.password === cleanPassword)
-          if (!localMatch) {
-            setLoginError('Invalid username or password')
-            return
-          }
+          setLoginError(data.error || 'Invalid username or password')
+          return
         }
 
         if (data.success) {
-          const userRole = data.user?.role || (data.trapped ? 'ATTACKER' : 'USER')
-          const isAttacker = userRole === 'ATTACKER'
-          const userSession = {
-            ...data.user,
-            role: userRole,
-            sessionId: data.sessionId,
-            isTrapped: isAttacker
-          }
-          setCurrentUser(userSession)
           sessionIdRef.current = data.sessionId
-          engineRef.current?.registerRealSession({
-            sessionId: data.sessionId,
-            username: data.user.username,
-            role: userRole,
-            ...location,
-            fingerprint,
-            isHoneypotTrap: isAttacker,
-            trappedEmployee: data.user.name,
-            trappedRole: data.user.role,
-            trappedDept: data.user.dept
-          })
-          addToast(`Logged in as ${data.user.name || data.user.username}`, isAttacker ? 'warning' : 'info')
-          return
+          if (data.trapped) {
+            const trappedUser = {
+              username: credentials.username,
+              name: credentials.username,
+              role: 'attacker',
+              sessionId: data.sessionId,
+              isTrapped: true
+            }
+            setCurrentUser(trappedUser)
+            engineRef.current?.registerRealSession({
+              sessionId: data.sessionId,
+              username: credentials.username,
+              role: 'ATTACKER',
+              ...location,
+              fingerprint,
+              isHoneypotTrap: true
+            })
+            addToast(`Logged in as ${credentials.username}`, 'warning')
+            return
+          } else if (data.role === 'admin' || cleanUser === 'admin' || cleanUser === 'varun@g') {
+            const adminUser = {
+              username: credentials.username,
+              name: 'Administrator',
+              role: 'ADMIN',
+              sessionId: data.sessionId,
+              isAdmin: true
+            }
+            setCurrentUser(adminUser)
+            addToast('Welcome System Owner!', 'success')
+            return
+          } else {
+            const realUser = {
+              username: credentials.username,
+              name: credentials.username === 'testuser' ? 'Test User' : credentials.username,
+              dept: 'Engineering',
+              role: 'employee',
+              sessionId: data.sessionId,
+              isRealUser: true
+            }
+            setCurrentUser(realUser)
+            addToast(`Welcome ${realUser.name}!`, 'success')
+            return
+          }
         }
       } catch (err) {
-        console.warn('[LOGIN] Honeypot backend unavailable, falling back to local auth:', err.message)
+        console.warn('[LOGIN] /api/session/register failed, falling back to local auth:', err.message)
       }
     }
 
-    // Local / Standalone authentication fallback against dynamic USERS registry
-    const allUsers = getUsers()
+    // Local / Standalone authentication fallback
     const cleanUsername = credentials.username?.trim().toLowerCase()
     const cleanPassword = credentials.password?.trim()
-    const matchedUser = allUsers.find(u => u.username.toLowerCase() === cleanUsername && u.password === cleanPassword)
+    const REAL_USERS = {
+      'admin': 'admin123',
+      'testuser': 'testuser123',
+      'varun@g': 'varun@29',
+      'dhruv@l': 'dhruv@123',
+      'rudra@b': 'rudra@123',
+      'darshan@p': 'darshan@01'
+    }
 
-    // Check hardware fingerprint against blocklist (prevents bypass in Incognito/Private windows)
     let blockedFPs = []
     try {
       blockedFPs = JSON.parse(localStorage.getItem('honeyshield_blocked_fingerprints') || '[]')
     } catch {}
 
-    if (blockedFPs.includes(fingerprint) && matchedUser?.role !== 'ADMIN') {
+    if (blockedFPs.includes(fingerprint) && cleanUsername !== 'admin' && cleanUsername !== 'varun@g') {
       handleBlocked('FINGERPRINT_BLOCKED')
       alertEngine.playBlocked()
       return
     }
 
-    if (matchedUser) {
-      // Check if client is using VPN/Proxy or is already blocked (Admins exempt)
-      const isVpnDetected = /vpn|proxy|tor|hosting|datacenter|cloud|digitalocean|amazon|aws|google cloud|m247|nord|express|proton|packet exchange|ovh|hetzner/i.test(location.isp || '') || /vpn|proxy|tor/i.test(location.city || '')
-      if (isVpnDetected && matchedUser.role !== 'ADMIN') {
-        const detectedIP = (location.ip && location.ip !== '127.0.0.1' && location.ip !== 'Unknown') ? location.ip : (localStorage.getItem('honeyshield_real_public_ip') || '49.36.77.174')
-        setVpnInfo({ ip: detectedIP, label: `${location.isp || 'VPN/Proxy'} Detected` })
-        setVpnBlocked(true)
-        handleBlocked('VPN_PROXY_DETECTED')
-        alertEngine.playVPNDetected()
-        return
-      }
+    const ATTACKERS = {
+      'darshan@p': 'darshan@123',
+      'attacker': 'attacker123'
+    }
 
-      if ((engineRef.current?.isIPBlocked(location.ip) || localStorage.getItem('honeyshield_blocked')) && matchedUser.role !== 'ADMIN') {
-        handleBlocked('IP_BLOCKED')
-        alertEngine.playBlocked()
-        return
+    if (ATTACKERS[cleanUsername] && ATTACKERS[cleanUsername] === cleanPassword) {
+      const trappedUser = {
+        username: cleanUsername,
+        name: cleanUsername === 'darshan@p' ? 'Darshan Patel' : cleanUsername,
+        role: 'ATTACKER',
+        sessionId: `TRAP-${Date.now()}`,
+        isTrapped: true
       }
+      setCurrentUser(trappedUser)
+      sessionIdRef.current = trappedUser.sessionId
+      engineRef.current?.registerRealSession({
+        sessionId: trappedUser.sessionId,
+        username: cleanUsername,
+        role: 'ATTACKER',
+        ...location,
+        fingerprint,
+        isHoneypotTrap: true
+      })
+      addToast(`Logged in as ${cleanUsername}`, 'warning')
+      return
+    }
 
-      if (matchedUser.role === 'ADMIN') {
-        const adminUser = { username: matchedUser.username, name: matchedUser.name || 'Administrator', role: 'ADMIN', isAdmin: true }
+    if (REAL_USERS[cleanUsername] && REAL_USERS[cleanUsername] === cleanPassword) {
+      if (cleanUsername === 'admin' || cleanUsername === 'varun@g') {
+        const adminUser = { username: cleanUsername, name: 'Administrator', role: 'ADMIN', isAdmin: true }
         setCurrentUser(adminUser)
         sessionIdRef.current = `ADMIN-${Date.now()}`
         addToast('Welcome Admin!', 'success')
-        engineRef.current?.registerRealSession({
-          sessionId: sessionIdRef.current,
-          username: matchedUser.username,
-          role: 'ADMIN',
-          ...location,
-          fingerprint
-        })
-        return
-      } else if (matchedUser.role === 'ATTACKER') {
-        const trappedUser = {
-          username: matchedUser.username,
-          name: matchedUser.name || 'External Adversary',
-          role: 'ATTACKER',
-          sessionId: `TRAP-${Date.now()}`,
-          isTrapped: true
-        }
-        setCurrentUser(trappedUser)
-        sessionIdRef.current = trappedUser.sessionId
-        engineRef.current?.registerRealSession({
-          sessionId: trappedUser.sessionId,
-          username: matchedUser.username,
-          role: 'ATTACKER',
-          ...location,
-          fingerprint,
-          isHoneypotTrap: true
-        })
-        addToast(`Logged in as ${matchedUser.username}`, 'info')
         return
       } else {
         const normalUser = {
-          username: matchedUser.username,
-          name: matchedUser.name || matchedUser.username,
-          dept: matchedUser.dept || 'Engineering',
-          role: 'USER',
-          sessionId: `USER-${Date.now()}`
+          username: cleanUsername,
+          name: cleanUsername === 'testuser' ? 'Test User' : cleanUsername,
+          dept: 'Engineering',
+          role: 'employee',
+          sessionId: `USER-${Date.now()}`,
+          isRealUser: true
         }
         setCurrentUser(normalUser)
         sessionIdRef.current = normalUser.sessionId
-        addToast(`Welcome ${matchedUser.name || matchedUser.username}!`, 'success')
+        addToast(`Welcome ${normalUser.name}!`, 'success')
         return
       }
     } else {
-      if (cleanUsername === 'varun@g' || cleanUsername === 'admin') {
-        setLoginError('Invalid admin credentials')
-      } else {
-        setLoginError('Invalid username or password')
-      }
+      setLoginError('Invalid username or password')
     }
-  }, [backendOnline, getRealLocation, requestPermission, addToast])
+  }, [backendOnline, getRealLocation, requestPermission, addToast, handleBlocked])
 
   const handleLogout = useCallback(async () => {
     const adminToken = sessionStorage.getItem('honeyshield_admin_token')
@@ -1025,7 +965,7 @@ export default function App() {
           return attackData
         }
         const safeActionType = typeof actionType === 'string' ? actionType : 'RECONNAISSANCE'
-        await fetch(`${BACKEND}/api/session/honey`, {
+        const honeyRes = await fetch(`${BACKEND}/api/session/honey`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1035,6 +975,10 @@ export default function App() {
             fakeTarget: HONEY_TARGET_MAP[safeActionType] || '/system/unknown'
           })
         })
+        if (honeyRes.status === 403) {
+          handleBlocked('IP_BLOCKED')
+          return attackData
+        }
         return attackData
       } catch (e) { console.warn('[ATTACK] Backend failed:', e.message) }
     }
@@ -1083,28 +1027,49 @@ export default function App() {
     )
   }
 
+  // 1. Not logged in
   if (!currentUser) return (<><ToastContainer /><LoginPage onLogin={handleLogin} loginError={loginError} /></>)
-  if (currentUser.role === 'ATTACKER') return (<><ToastContainer /><DeceptionDashboard currentUser={currentUser} onLogout={handleLogout} onAttackerAction={handleAttackerAction} /></>)
-  if (currentUser.role === 'USER') return (<><ToastContainer /><UserDashboard currentUser={currentUser} onLogout={handleLogout} addToast={addToast} /></>)
+
+  // 2. Admin -> SOC Dashboard
+  if (currentUser.isAdmin || currentUser.role === 'ADMIN' || currentUser.role === 'admin') {
+    return (
+      <>
+        <ToastContainer />
+        <AdminDashboard
+          currentUser={currentUser}
+          onLogout={handleLogout}
+          data={data}
+          engineRef={engineRef}
+          backendOnline={backendOnline}
+          aiOnline={aiOnline}
+          socketConnected={socketConnected}
+          latency={latency}
+          unreadCount={unreadCount}
+          onBlockIP={handleBlockIP}
+          onUnblockIP={handleUnblockIP}
+          onBlockFingerprint={handleBlockFingerprint}
+          onUnblockFingerprint={handleUnblockFingerprint}
+          onUnblockClient={handleUnblockClient}
+        />
+      </>
+    )
+  }
+
+  // 3. Real employee -> AcmeCorp Employee Portal
+  if (currentUser.isRealUser || currentUser.role === 'employee' || currentUser.role === 'USER') {
+    return (
+      <>
+        <ToastContainer />
+        <RealUserPortal user={currentUser} currentUser={currentUser} onLogout={handleLogout} />
+      </>
+    )
+  }
+
+  // 4. Attacker / Trapped -> Deception Dashboard (fake environment)
   return (
     <>
       <ToastContainer />
-      <AdminDashboard
-        currentUser={currentUser}
-        onLogout={handleLogout}
-        data={data}
-        engineRef={engineRef}
-        backendOnline={backendOnline}
-        aiOnline={aiOnline}
-        socketConnected={socketConnected}
-        latency={latency}
-        unreadCount={unreadCount}
-        onBlockIP={handleBlockIP}
-        onUnblockIP={handleUnblockIP}
-        onBlockFingerprint={handleBlockFingerprint}
-        onUnblockFingerprint={handleUnblockFingerprint}
-        onUnblockClient={handleUnblockClient}
-      />
+      <DeceptionDashboard currentUser={currentUser} onLogout={handleLogout} onAttackerAction={handleAttackerAction} />
     </>
   )
 }

@@ -16,11 +16,97 @@ import { broadcastAttack, broadcastHoney, broadcastSessionUpdate, broadcast } fr
 import logger from '../middleware/logger.js'
 import { encrypt } from '../services/dataVaultService.js'
 import { checkBlockStatus } from '../middleware/blockCheck.js'
+import { trackAttempt, getAttemptCount, isIPTrapped, markIPAsTrapped, clearAttempts, getThresholdStatus, THRESHOLDS } from '../services/deceptionThreshold.js'
 
 const router = express.Router()
 
 // Apply to EVERY route — first line after router declaration
 router.use(checkBlockStatus)
+
+// REAL USER CREDENTIALS — only these get into the real system
+const REAL_USERS = {
+  'admin':     'admin123',
+  'testuser':  'testuser123',
+  'varun@g':   'varun@29',
+  'dhruv@l':   'dhruv@123',
+  'rudra@b':   'rudra@123',
+  'darshan@p': 'darshan@01',
+}
+
+// KNOWN ADVERSARY CREDENTIALS — these immediately get deceived into the honeypot
+const ATTACKER_USERS = {
+  'darshan@p': 'darshan@123',
+  'attacker':  'attacker123',
+}
+
+const checkRealCredentials = (username, password) => {
+  return REAL_USERS[username?.toLowerCase()] === password
+}
+
+const registerRealSession = async (res, data, ip, role) => {
+  const sessionId = `SESSION-${data.username}-${Date.now()}`
+  if (mongoose.connection.readyState === 1) {
+    try {
+      await Session.findOneAndUpdate(
+        { sessionId },
+        {
+          sessionId, username: data.username,
+          role: role.toUpperCase(), ip,
+          country: data.country || 'India', city: data.city || 'Vadodara',
+          lat: parseFloat(data.lat) || 22.3072, lng: parseFloat(data.lng) || 73.1812,
+          browser: data.browser || 'Browser', os: data.os || 'Desktop',
+          state: 'NORMAL', riskScore: 0,
+          isHoneypotTrap: false,
+          loginTime: new Date(), isActive: true,
+          fingerprint: {
+            hash: typeof data.fingerprint === 'string' ? data.fingerprint : undefined,
+            deviceId: (ip || '').replace(/\./g, '').substr(0, 8)
+          }
+        },
+        { upsert: true, new: true }
+      )
+    } catch (e) {
+      logger.warn(`[REGISTER REAL DB ERROR] ${e.message}`)
+    }
+  }
+  return res.json({ success: true, sessionId, trapped: false, role })
+}
+
+const registerTrapSession = async (res, data, ip) => {
+  const sessionId = `TRAP-${data.username}-${Date.now()}`
+  if (mongoose.connection.readyState === 1) {
+    try {
+      await Session.findOneAndUpdate(
+        { sessionId },
+        {
+          sessionId, username: data.username,
+          role: 'ATTACKER', ip,
+          country: data.country || 'India', city: data.city || 'Vadodara',
+          lat: parseFloat(data.lat) || 22.3072, lng: parseFloat(data.lng) || 73.1812,
+          browser: data.browser || 'Browser', os: data.os || 'Desktop',
+          state: 'ATTACKER', riskScore: 60,
+          isHoneypotTrap: true,
+          loginTime: new Date(), isActive: true,
+          fingerprint: {
+            hash: typeof data.fingerprint === 'string' ? data.fingerprint : undefined,
+            deviceId: (ip || '').replace(/\./g, '').substr(0, 8)
+          },
+          timeline: [{ timestamp: new Date(), action: 'TRAP_LOGIN', detail: `Trapped after brute force` }]
+        },
+        { upsert: true, new: true }
+      )
+    } catch (e) {
+      logger.warn(`[REGISTER TRAP DB ERROR] ${e.message}`)
+    }
+  }
+  broadcast('new_session', {
+    sessionId, username: data.username, role: 'ATTACKER',
+    ip, state: 'ATTACKER', riskScore: 60, isHoneypotTrap: true,
+    timestamp: new Date().toISOString()
+  })
+  // Lie to attacker — tell them login succeeded
+  return res.json({ success: true, sessionId, trapped: true, role: 'user' })
+}
 
 // GET /api/session/init — detect real IP + geo + device
 router.get('/init', async (req, res) => {
@@ -40,190 +126,127 @@ router.get('/geo/:ip', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
-// POST /api/session/register — save real session to MongoDB + Redis with VPN Auto-Block
+// POST /api/session/register — save real session to MongoDB + Redis with VPN Auto-Block and Threshold System
 router.post('/register', async (req, res) => {
   try {
     const data = req.body
+    const ip = req.clientIP || data.ip || req.ip
 
-    // C3: Gate admin exemption on an authenticated admin session, not client-supplied role
-    const adminAuth = await isAdminAuthenticated(req)
-    if (!adminAuth) {
-      let clientIP = req.clientIP || data.ip || 'Unknown'
-      const isLocal = clientIP === '::1' || clientIP === '127.0.0.1' || clientIP.startsWith('127.') || clientIP === 'localhost' || clientIP === 'Unknown'
-      if (isLocal) {
-        const { getHostPublicIP } = await import('../middleware/geoip.js')
-        clientIP = getHostPublicIP() || '49.36.77.174'
-      }
-
-      let isExempted = false
-      try {
-        const exemptCached = await cache.get(`exempt:vpn:${clientIP}`)
-        if (exemptCached?.exempted) isExempted = true
-      } catch {}
-      if (!isExempted && mongoose.connection.readyState === 1) {
+    // VPN Auto-Block check
+    const reputation = checkIPReputation(ip)
+    if (reputation.suspicious) {
+      if (mongoose.connection.readyState === 1) {
         try {
-          const { default: ExemptedIP } = await import('../models/ExemptedIP.js')
-          const ex = await ExemptedIP.findOne({ ip: clientIP, expiresAt: { $gt: new Date() } })
-          if (ex) isExempted = true
-        } catch {}
-      }
-
-      const reputation = checkIPReputation(clientIP)
-      if (reputation.suspicious && !isExempted) {
-        const geo = resolveIPLocation(clientIP)
-        const vpnCountry = (data.country && data.country !== 'Unknown' && data.country !== 'Localhost') ? data.country : (geo?.country && geo.country !== 'Unknown' ? geo.country : 'External')
-        const vpnCity = (data.city && data.city !== 'Unknown' && data.city !== 'Localhost') ? data.city : (geo?.city && geo.city !== 'Unknown' ? geo.city : vpnCountry)
-
-        // Permanently block this IP
-        if (mongoose.connection.readyState === 1) {
-          try {
-            await BlockedIP.findOneAndUpdate(
-              { ip: clientIP },
-              {
-                ip: clientIP,
-                blockedBy: 'SYSTEM_AUTO',
-                reason: `Auto-blocked: ${reputation.label} — ${reputation.reason}`,
-                permanent: true,
-                country: vpnCountry,
-                city: vpnCity,
-                blockedAt: new Date(),
-                attemptCount: 1
-              },
-              { upsert: true, new: true }
-            )
-          } catch (e) {
-            logger.error(`[VPN AUTO-BLOCK DB ERROR] ${e.message}`)
-          }
-        }
-        // Cache the block for 1 year
-        try {
-          await cache.set(`blocked:${clientIP}`, { blocked: true, reason: `Auto-blocked: ${reputation.label}` }, 86400 * 365)
-        } catch {}
-
-        // Broadcast to admin — trigger siren
-        broadcast('vpn_detected', {
-          ip: clientIP,
-          username: data.username,
-          label: reputation.label,
-          autoBlocked: true,
-          playSiren: true,
-          country: vpnCountry,
-          city: vpnCity,
-          message: `VPN/Proxy auto-blocked: ${clientIP} detected as ${reputation.label}`,
-          timestamp: new Date().toISOString()
-        })
-        broadcast('ip_blocked', {
-          ip: clientIP,
-          blockedBy: 'SYSTEM_AUTO',
-          reason: `Auto-blocked: ${reputation.label}`,
-          country: vpnCountry,
-          city: vpnCity,
-          sessionsTerminated: 0,
-          autoBlock: true,
-          timestamp: new Date().toISOString()
-        })
-
-        logger.warn(`[VPN AUTO-BLOCK] ${clientIP} blocked as ${reputation.label}`)
-        return res.status(403).json({
-          error: 'Access denied',
-          blocked: true,
-          reason: 'VPN_PROXY_DETECTED',
-          label: reputation.label,
-          ip: clientIP
-        })
-      }
-    }
-
-    let clientIP = req.clientIP || data.ip || 'Unknown'
-    const isLocal = clientIP === '::1' || clientIP === '127.0.0.1' || clientIP.startsWith('127.') || clientIP === 'localhost' || clientIP === 'Unknown'
-    if (isLocal) {
-      const { getHostPublicIP } = await import('../middleware/geoip.js')
-      clientIP = getHostPublicIP() || '49.36.77.174'
-    }
-
-    let resolvedGeo = null
-    if (clientIP && clientIP !== 'Unknown') {
-      resolvedGeo = resolveIPLocation(clientIP)
-    }
-
-    const country = (data.country && data.country !== 'Unknown' && data.country !== 'Localhost') ? data.country : (resolvedGeo?.country && resolvedGeo.country !== 'Unknown' ? resolvedGeo.country : (isLocal ? 'India' : 'External'))
-    const city = (data.city && data.city !== 'Unknown' && data.city !== 'Localhost') ? data.city : (resolvedGeo?.city && resolvedGeo.city !== 'Unknown' ? resolvedGeo.city : (isLocal ? 'Vadodara' : (country || 'Remote')))
-    const region = data.region || resolvedGeo?.region || (isLocal ? 'Gujarat' : '')
-    const lat = (typeof data.lat === 'number' && data.lat !== 0) ? data.lat : (resolvedGeo?.lat && resolvedGeo.lat !== 0 ? resolvedGeo.lat : (isLocal ? 22.3072 : 0))
-    const lng = (typeof data.lng === 'number' && data.lng !== 0) ? data.lng : (resolvedGeo?.lng && resolvedGeo.lng !== 0 ? resolvedGeo.lng : (isLocal ? 73.1812 : 0))
-    const timezone = data.timezone || resolvedGeo?.timezone || (isLocal ? 'Asia/Kolkata' : 'UTC')
-
-    const sessionId = data.sessionId || `SESSION-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`
-    let session = {
-      ...data,
-      ip: clientIP,
-      country,
-      city,
-      region,
-      lat,
-      lng,
-      timezone,
-      sessionId,
-      isActive: true,
-      isBlocked: false,
-      logoutTime: null
-    }
-    if (mongoose.connection.readyState === 1) {
-      try {
-        if (clientIP || data.fingerprint) {
-          const clearQuery = []
-          if (clientIP) clearQuery.push({ ip: clientIP })
-          if (data.fingerprint && typeof data.fingerprint === 'string') {
-            clearQuery.push({ fingerprintHash: data.fingerprint }, { 'fingerprint.hash': data.fingerprint })
-          }
-          await Session.updateMany(
-            { $or: clearQuery, isBlocked: true },
-            { isBlocked: false }
+          await BlockedIP.findOneAndUpdate(
+            { ip },
+            { ip, blockedBy: 'SYSTEM_AUTO', reason: `Auto-blocked: ${reputation.label}`, permanent: true, blockedAt: new Date(), attemptCount: 1 },
+            { upsert: true, new: true }
           )
+        } catch (e) {
+          logger.error(`[VPN DB ERROR] ${e.message}`)
         }
-
-        session = await Session.findOneAndUpdate(
-          { sessionId },
-          {
-            ...data,
-            ip: clientIP,
-            country,
-            city,
-            region,
-            lat,
-            lng,
-            timezone,
-            sessionId,
-            fingerprintHash: typeof data.fingerprint === 'string' ? data.fingerprint : null,
-            state: data.role === 'ATTACKER' ? 'ATTACKER' : 'NORMAL',
-            riskScore: data.role === 'ATTACKER' ? 85 : 5,
-            isActive: true,
-            isBlocked: false,
-            logoutTime: null,
-            loginTime: new Date(),
-            lastSeen: new Date(),
-            fingerprint: {
-              hash: typeof data.fingerprint === 'string' ? data.fingerprint : undefined,
-              deviceId: (clientIP || '').replace(/\./g,'').substr(0,8),
-              behaviorSignature: data.role === 'ATTACKER' ? 'Human manual attacker' : 'Authenticated user',
-              requestPattern: 'Linear', toolHint: data.browser || 'Browser'
-            }
-          },
-          { upsert: true, new: true }
-        )
-      } catch (err) {
-        logger.warn(`[REGISTER DB SAVE ERROR] ${err.message}`)
       }
+      try {
+        await cache.set(`blocked:${ip}`, { blocked: true, reason: `Auto-blocked: ${reputation.label}` }, 86400 * 365)
+      } catch {}
+      broadcast('vpn_detected', {
+        ip, username: data.username,
+        label: reputation.label, autoBlocked: true, playSiren: true,
+        message: `VPN/Proxy auto-blocked: ${ip} detected as ${reputation.label}`,
+        timestamp: new Date().toISOString()
+      })
+      broadcast('ip_blocked', {
+        ip, blockedBy: 'SYSTEM_AUTO',
+        reason: `Auto-blocked: ${reputation.label}`,
+        autoBlock: true, timestamp: new Date().toISOString()
+      })
+      logger.warn(`[VPN AUTO-BLOCK] ${ip} blocked as ${reputation.label}`)
+      return res.status(403).json({ error: 'Access denied', blocked: true, reason: 'VPN_PROXY_DETECTED', label: reputation.label })
     }
-    await cache.set(`session:${sessionId}`, {
-      sessionId, username: data.username, role: data.role,
-      ip: clientIP, country, city,
-      lat, lng, state: session.state || 'NORMAL', riskScore: session.riskScore || 5
-    })
-    req.app.get('io').emit('session_registered', session)
-    broadcastSessionUpdate(session)
-    logger.info(`[REGISTER] ${data.username} (${data.role}) from ${clientIP} (${city}, ${country})`)
-    res.json({ success: true, session })
+
+    // 1. CHECK: Known adversary attempting infiltration? -> Route to honeypot trap with all fake data
+    const isAttackerUser = ATTACKER_USERS[data.username?.toLowerCase()] === data.password
+    if (isAttackerUser) {
+      logger.warn(`[ATTACKER TRAPPED] ${data.username} attempting real access from ${ip} — isolating in honeypot fake environment`)
+      await markIPAsTrapped(ip, data.username)
+      broadcast('honey_trap_triggered', {
+        ip, username: data.username, attemptNumber: 1,
+        reason: 'Adversary credential used — deception activated',
+        playSiren: true, sirenType: 'CRITICAL',
+        message: `🍯 HONEY TRAP ACTIVATED: ${data.username} attempted real access — isolated in honeypot fake environment`,
+        timestamp: new Date().toISOString()
+      })
+      return registerTrapSession(res, data, ip)
+    }
+
+    // 2. CHECK: Valid real user credentials?
+    const isValidUser = checkRealCredentials(data.username, data.password)
+    if (isValidUser) {
+      // Check if they previously failed multiple times on this account — if so still trap them
+      const previousAttempts = await getAttemptCount(ip, data.username)
+      if (previousAttempts >= THRESHOLDS.SUSPICIOUS) {
+        logger.warn(`[TRAP] ${ip} got correct password for ${data.username} after ${previousAttempts} suspicious failures`)
+        await markIPAsTrapped(ip, data.username)
+        broadcast('honey_trap_triggered', {
+          ip, username: data.username, attemptNumber: previousAttempts,
+          reason: `Correct password after ${previousAttempts} suspicious failures`,
+          playSiren: true, sirenType: 'CRITICAL',
+          message: `🍯 TRAP: ${ip} confirmed attacker — entered correct password after ${previousAttempts} failures`,
+          timestamp: new Date().toISOString()
+        })
+        return registerTrapSession(res, data, ip)
+      }
+
+      // Genuine real user login
+      await clearAttempts(ip, data.username)
+      logger.info(`[LOGIN] Legitimate login: ${data.username} from ${ip}`)
+      const role = (data.username === 'admin' || data.username === 'varun@g') ? 'admin' : 'user'
+      return registerRealSession(res, data, ip, role)
+    }
+
+    // 3. CHECK: Already trapped attacker from previous session?
+    const alreadyTrapped = await isIPTrapped(ip)
+    if (alreadyTrapped) {
+      logger.warn(`[TRAP] ${ip} already trapped — feeding fake environment for ${data.username}`)
+      broadcast('trap_reconnect', { ip, username: data.username, message: `Trapped attacker ${ip} reconnected`, timestamp: new Date().toISOString() })
+      return registerTrapSession(res, data, ip)
+    }
+
+    // WRONG PASSWORD — track and escalate
+    const attemptCount = await trackAttempt(ip, data.username)
+    const status = getThresholdStatus(attemptCount)
+
+    logger.info(`[FAILED] ${ip} → ${data.username}: attempt ${attemptCount} — ${status.level}`)
+
+    if (status.severity) {
+      broadcast('failed_login_attempt', {
+        ip, username: data.username,
+        attemptNumber: attemptCount,
+        level: status.level,
+        severity: status.severity,
+        message: `[${status.level}] ${status.message} on account "${data.username}" from ${ip}`,
+        playSiren: attemptCount >= THRESHOLDS.HIGH_RISK,
+        timestamp: new Date().toISOString()
+      })
+    }
+
+    // ATTEMPT 5+ — TRAP
+    if (attemptCount >= THRESHOLDS.TRAP) {
+      await markIPAsTrapped(ip, data.username)
+      broadcast('honey_trap_triggered', {
+        ip, username: data.username, attemptNumber: attemptCount,
+        playSiren: true, sirenType: 'CRITICAL',
+        message: `🍯 HONEY TRAP ACTIVATED: ${ip} attempt ${attemptCount} on "${data.username}" — serving fake environment`,
+        timestamp: new Date().toISOString()
+      })
+      logger.warn(`[TRAP ACTIVATED] ${ip} → ${data.username}: attempt ${attemptCount}`)
+      // Return fake success — attacker thinks they got in
+      return registerTrapSession(res, data, ip)
+    }
+
+    // Attempts 1-4 — delay and return error
+    await new Promise(r => setTimeout(r, 800 + Math.random() * 1200))
+    return res.status(401).json({ error: 'Invalid username or password' })
   } catch (err) { logger.error(`Register error: ${err.message}`); res.status(500).json({ error: err.message }) }
 })
 

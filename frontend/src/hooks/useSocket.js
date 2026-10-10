@@ -80,9 +80,10 @@ export const useSocket = (props = {}, legacyAddToast, legacyOnBlocked) => {
 
     socket.on('session_blocked', data => {
       console.log('[Socket] session_blocked received:', data)
+      const isAdmin = !!sessionStorage.getItem('honeyshield_admin_token') || handlersRef.current.currentUserRef?.current?.isAdmin
       const currentSessionId = handlersRef.current.sessionIdRef?.current
       const currentIP = handlersRef.current.locationRef?.current?.ip
-      if (!currentSessionId || data.sessionId === currentSessionId || (currentIP && data.ip === currentIP)) {
+      if (!isAdmin && ((data.sessionId && data.sessionId === currentSessionId) || (currentIP && data.ip === currentIP) || (!currentSessionId && data.ip === currentIP))) {
         console.log('[Socket] THIS SESSION IS BLOCKED — showing blocked screen')
         alertEngine.stopContinuousAlert()
         alertEngine.playBlocked()
@@ -96,10 +97,11 @@ export const useSocket = (props = {}, legacyAddToast, legacyOnBlocked) => {
 
     socket.on('ip_blocked', data => {
       console.log('[Socket] ip_blocked received:', data)
-      alertEngine.stopContinuousAlert()
-      alertEngine.playBlocked()
+      const isAdmin = !!sessionStorage.getItem('honeyshield_admin_token') || handlersRef.current.currentUserRef?.current?.isAdmin
       const currentIP = handlersRef.current.locationRef?.current?.ip
-      if (currentIP && data.ip === currentIP) {
+      if (!isAdmin && currentIP && data.ip === currentIP) {
+        alertEngine.stopContinuousAlert()
+        alertEngine.playBlocked()
         const onBlocked = handlersRef.current.onBlocked
         if (typeof onBlocked === 'function') onBlocked(data.reason || 'IP_BLOCKED')
       }
@@ -109,6 +111,7 @@ export const useSocket = (props = {}, legacyAddToast, legacyOnBlocked) => {
     })
 
     socket.on('ip_unblocked', data => {
+      console.log('[Socket] ip_unblocked received:', data)
       handlersRef.current.onIPUnblocked?.(data)
       const toast = handlersRef.current.addToast
       if (typeof toast === 'function') toast(`✅ ${data.ip} unblocked — ${data.reason || 'Admin unblocked'}`, 'success')
@@ -124,13 +127,48 @@ export const useSocket = (props = {}, legacyAddToast, legacyOnBlocked) => {
 
     socket.on('vpn_detected', data => {
       console.log('[Socket] vpn_detected:', data)
+      alertEngine.playVPNDetected()
+      const toast = handlersRef.current.addToast
+      if (typeof toast === 'function') toast(data.message || `🚨 VPN AUTO-BLOCKED: ${data.ip} detected as ${data.label}`, 'critical')
       handlersRef.current.onVPNDetected?.(data)
     })
 
-    // Honey trap triggered — attacker found a decoy account
+    // Failed login attempt escalation
+    socket.on('failed_login_attempt', data => {
+      console.log('[Socket] failed_login_attempt:', data)
+      const toast = handlersRef.current.addToast
+      if (data.level === 'FLAGGED') {
+        alertEngine.playMedium()
+        if (typeof toast === 'function') toast(`⚠️ [FLAGGED] Failed login attempt for ${data.username} from ${data.ip}`, 'warning')
+      } else if (data.level === 'SUSPICIOUS') {
+        alertEngine.playHigh()
+        if (typeof toast === 'function') toast(`⚠️ [SUSPICIOUS] Multiple failed attempts for ${data.username} from ${data.ip}`, 'warning')
+      } else if (data.level === 'HIGH_RISK') {
+        alertEngine.startContinuousAlert('HIGH', 8000)
+        if (typeof toast === 'function') toast(`🚨 [HIGH RISK] Brute force detected on ${data.username} from ${data.ip}`, 'critical')
+      } else if (data.level === 'TRAP') {
+        alertEngine.playPoliceSiren(5)
+        if (typeof toast === 'function') toast(`🍯 [TRAP] Honeypot route triggered for ${data.username} from ${data.ip}`, 'critical')
+      }
+      handlersRef.current.onFailedLoginAttempt?.(data)
+    })
+
+    // Honey trap triggered — attacker found a decoy account or threshold reached
     socket.on('honey_trap_triggered', data => {
       console.log('[Socket] HONEY TRAP TRIGGERED:', data)
+      alertEngine.playPoliceSiren(5)
+      const toast = handlersRef.current.addToast
+      if (typeof toast === 'function') toast(data.message || `🍯 HONEY TRAP: Attacker ${data.username || ''} from ${data.ip} trapped`, 'critical')
       handlersRef.current.onHoneyTrap?.(data)
+    })
+
+    // Trap reconnect — attacker already flagged reconnected
+    socket.on('trap_reconnect', data => {
+      console.log('[Socket] trap_reconnect:', data)
+      const toast = handlersRef.current.addToast
+      alertEngine.playHoneyTrap()
+      if (typeof toast === 'function') toast(data.message || `🍯 Trapped IP ${data.ip} reconnected (${data.username})`, 'warning')
+      handlersRef.current.onTrapReconnect?.(data)
     })
 
     // Suspicious login detected

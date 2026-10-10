@@ -103,15 +103,16 @@ export default function AdminDashboard({ currentUser, onLogout, data, engineRef,
     return { label: 'CRITICAL', color: '#FFF', bg: '#FF4444', pulse: true };
   }, [safeData.sessions]);
 
-  const navItems = currentUser.role === 'ADMIN' ? ADMIN_NAV : USER_NAV;
+  const isAdmin = Boolean(currentUser?.isAdmin || currentUser?.role?.toUpperCase() === 'ADMIN' || currentUser?.role === 'admin');
+  const navItems = isAdmin ? ADMIN_NAV : USER_NAV;
 
   const renderPage = () => {
-    if (currentUser.role === 'USER' && !['Overview', 'Data Vault'].includes(activePage)) {
+    if (!isAdmin && !['Overview', 'Data Vault'].includes(activePage)) {
       return (
         <div style={{ padding: '40px', textAlign: 'center', color: '#8B949E' }}>
           <AlertTriangle size={48} style={{ margin: '0 auto 20px', color: '#FFC107' }} />
           <h2>Access Restricted</h2>
-          <p>Your current role ({currentUser.role}) does not have access to this module.</p>
+          <p>Your current role ({currentUser?.role}) does not have access to this module.</p>
         </div>
       );
     }
@@ -133,7 +134,7 @@ export default function AdminDashboard({ currentUser, onLogout, data, engineRef,
       case 'Live Tracking': return <LiveTrackingPage data={safeData} onBlockIP={onBlockIP} onBlockFingerprint={onBlockFingerprint} backendOnline={backendOnline} />;
       case 'Blocked IPs': return <BlockedIPsPage data={safeData} onBlockIP={onBlockIP} onUnblockIP={onUnblockIP} onBlockFingerprint={onBlockFingerprint} onUnblockFingerprint={onUnblockFingerprint} onUnblockClient={onUnblockClient} backendOnline={backendOnline} />;
       case 'Settings': return <SettingsPage settings={settings} setSettings={setSettings} data={safeData} backendOnline={backendOnline} />;
-      default: return <div>Page not found</div>;
+      default: return <OverviewPage data={safeData} engineRef={engineRef} currentUser={currentUser} />;
     }
   };
 
