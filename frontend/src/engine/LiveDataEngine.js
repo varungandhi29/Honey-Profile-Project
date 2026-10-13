@@ -136,14 +136,16 @@ class LiveDataEngine {
         if (feed.sessions && feed.sessions.length > 0) {
           const tenMinsAgo = Date.now() - 10 * 60 * 1000
           feed.sessions.forEach(s => {
-            const time = s.lastSeen ? new Date(s.lastSeen).getTime() : 0
+            const time = s.lastSeen ? new Date(s.lastSeen).getTime() : (s.loginTime ? new Date(s.loginTime).getTime() : Date.now())
             if (s.isActive && time > tenMinsAgo) {
               this.updateSession({
                 sessionId: s.sessionId, username: s.username, ip: s.ip,
                 country: s.country, city: s.city, lat: s.lat, lng: s.lng,
                 state: s.state, riskScore: s.riskScore, role: s.role,
                 browser: s.browser, os: s.os, attackTypes: s.attackTypes,
-                attackCount: s.attackCount, inHoney: s.inHoney, lastSeen: s.lastSeen
+                attackCount: s.attackCount, inHoney: s.inHoney, lastSeen: s.lastSeen,
+                isPrivateBrowser: Boolean(s.isPrivateBrowser),
+                isVPN: Boolean(s.isVPN)
               })
             }
           })
@@ -159,7 +161,7 @@ class LiveDataEngine {
         }
       }
 
-      const token = sessionStorage.getItem('adminToken')
+      const token = sessionStorage.getItem('honeyshield_admin_token') || sessionStorage.getItem('adminToken')
       const authHeaders = token ? { 'Authorization': `Bearer ${token}` } : {}
 
       const honeyRes = await fetch(`${backendUrl}/api/export/honey`, { headers: { 'Accept': 'application/json', ...authHeaders } })
@@ -463,17 +465,21 @@ class LiveDataEngine {
         ...sessionData,
         id: existing.id || sid,
         sessionId: sid || existing.sessionId,
+        role: sessionData.role || existing.role || 'USER',
         state: updatedState,
         riskScore: updatedScore,
         riskHistory: newHistory,
         attackCount: sessionData.attackCount !== undefined ? sessionData.attackCount : existing.attackCount,
         attackTypes: sessionData.attackTypes || existing.attackTypes,
         inHoney: sessionData.inHoney !== undefined ? sessionData.inHoney : existing.inHoney,
+        isPrivateBrowser: sessionData.isPrivateBrowser !== undefined ? Boolean(sessionData.isPrivateBrowser) : existing.isPrivateBrowser,
+        isVPN: sessionData.isVPN !== undefined ? Boolean(sessionData.isVPN) : existing.isVPN,
         lastSeen: sessionData.lastSeen || new Date().toISOString()
       }
     } else if (sid || sessionData.username) {
-      const initScore = sessionData.riskScore !== undefined ? sessionData.riskScore : (sessionData.role === 'ATTACKER' ? 85 : 0)
-      const initState = sessionData.state || (initScore > 70 ? 'ATTACKER' : sessionData.role === 'ATTACKER' ? 'ATTACKER' : 'NORMAL')
+      const initRole = (sessionData.role || (sessionData.username === 'admin' || sessionData.username === 'varun@g' ? 'ADMIN' : (sessionData.isHoneypotTrap ? 'ATTACKER' : 'USER'))).toUpperCase()
+      const initScore = sessionData.riskScore !== undefined ? sessionData.riskScore : (initRole === 'ATTACKER' ? 85 : 0)
+      const initState = sessionData.state || (initRole === 'ADMIN' ? 'NORMAL' : (initScore > 70 || initRole === 'ATTACKER' ? 'ATTACKER' : 'NORMAL'))
       this.sessions.push({
         id: sid || `SESSION-${sessionData.username}-${Date.now()}`,
         sessionId: sid || `SESSION-${sessionData.username}`,
@@ -481,12 +487,14 @@ class LiveDataEngine {
         ip: sessionData.ip || 'Unknown', country: sessionData.country || 'Unknown',
         city: sessionData.city || 'Unknown', lat: sessionData.lat || 0, lng: sessionData.lng || 0,
         state: initState, riskScore: initScore,
-        role: sessionData.role || (initState === 'ATTACKER' ? 'ATTACKER' : 'USER'),
+        role: initRole,
         browser: sessionData.browser || 'Unknown', os: sessionData.os || 'Unknown',
         attackTypes: sessionData.attackTypes || [], attackCount: sessionData.attackCount || 0,
         inHoney: sessionData.inHoney || false, honeyDuration: 0, honeyInteractions: 0,
+        isPrivateBrowser: Boolean(sessionData.isPrivateBrowser),
+        isVPN: Boolean(sessionData.isVPN),
         startTime: new Date(), duration: 0, riskHistory: [{ time: new Date().toLocaleTimeString(), score: initScore }],
-        fingerprint: { behaviorSignature: 'Authenticated user', toolHint: sessionData.browser || 'Browser' },
+        fingerprint: { behaviorSignature: initRole === 'ATTACKER' ? 'Adversary in sandbox' : (initRole === 'ADMIN' ? 'System Administrator' : 'Authenticated user'), toolHint: sessionData.browser || 'Browser' },
         timeline: [], isRealUser: true
       })
     }

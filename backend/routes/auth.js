@@ -9,9 +9,10 @@ import AuditLog from '../models/AuditLog.js'
 
 import BlockedIP from '../models/BlockedIP.js'
 import BlockedFingerprint from '../models/BlockedFingerprint.js'
+import Session from '../models/Session.js'
 import { broadcast } from '../services/broadcastService.js'
 import { getIPv6Prefix } from '../middleware/blockCheck.js'
-import { getHostPublicIP } from '../middleware/geoip.js'
+import { getHostPublicIP, resolveIPLocation } from '../middleware/geoip.js'
 import bcrypt from 'bcryptjs'
 import dotenv from 'dotenv'
 import path from 'path'
@@ -150,13 +151,73 @@ router.post('/admin-login', adminLoginLimiter, async (req, res) => {
     }
 
     logger.info(`[AUTH] Admin ${ADMIN_USER} successfully authenticated from ${req.ip}`)
+
+    const adminSessionId = `ADMIN-${Date.now()}`
+    const callerIP = req.ip?.replace('::ffff:', '').trim() || '127.0.0.1'
+    const geo = resolveIPLocation(callerIP)
+    const isPrivate = Boolean(req.body?.isPrivateBrowser)
+
+    if (mongoose.connection.readyState === 1) {
+      try {
+        await Session.findOneAndUpdate(
+          { username: ADMIN_USER, role: 'ADMIN', isActive: true },
+          {
+            sessionId: adminSessionId,
+            username: ADMIN_USER,
+            role: 'ADMIN',
+            ip: callerIP,
+            country: geo?.country || 'India',
+            city: geo?.city || 'Vadodara',
+            lat: geo?.lat || 22.3072,
+            lng: geo?.lng || 73.1812,
+            browser: req.body?.browser || 'Browser',
+            os: req.body?.os || 'Desktop',
+            state: 'NORMAL',
+            riskScore: 0,
+            isActive: true,
+            loginTime: new Date(),
+            lastSeen: new Date(),
+            isPrivateBrowser: isPrivate
+          },
+          { upsert: true, new: true }
+        )
+      } catch (err) {
+        logger.warn(`[AUTH] Admin session DB sync warning: ${err.message}`)
+      }
+    }
+
+    const adminSessionBroadcast = {
+      sessionId: adminSessionId,
+      id: adminSessionId,
+      username: ADMIN_USER,
+      role: 'ADMIN',
+      ip: callerIP,
+      country: geo?.country || 'India',
+      city: geo?.city || 'Vadodara',
+      lat: geo?.lat || 22.3072,
+      lng: geo?.lng || 73.1812,
+      browser: req.body?.browser || 'Browser',
+      os: req.body?.os || 'Desktop',
+      state: 'NORMAL',
+      riskScore: 0,
+      isActive: true,
+      loginTime: new Date().toISOString(),
+      lastSeen: new Date().toISOString(),
+      isPrivateBrowser: isPrivate
+    }
+    broadcast('session_registered', adminSessionBroadcast)
+    broadcast('session_updated', adminSessionBroadcast)
+
     res.json({
       success: true,
       token,
+      sessionId: adminSessionId,
       user: {
         username: ADMIN_USER,
         role: 'ADMIN',
-        name: 'System Administrator'
+        name: 'System Administrator',
+        sessionId: adminSessionId,
+        isPrivateBrowser: isPrivate
       }
     })
   } catch (err) {

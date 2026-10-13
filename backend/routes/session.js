@@ -45,67 +45,99 @@ const checkRealCredentials = (username, password) => {
 
 const registerRealSession = async (res, data, ip, role) => {
   const sessionId = `SESSION-${data.username}-${Date.now()}`
+  const isPrivate = Boolean(data.isPrivateBrowser)
+  const sessionDoc = {
+    sessionId, username: data.username,
+    role: role.toUpperCase(), ip,
+    country: data.country || 'India', city: data.city || 'Vadodara',
+    lat: parseFloat(data.lat) || 22.3072, lng: parseFloat(data.lng) || 73.1812,
+    browser: data.browser || 'Browser', os: data.os || 'Desktop',
+    state: 'NORMAL', riskScore: 0,
+    isHoneypotTrap: false,
+    isPrivateBrowser: isPrivate,
+    loginTime: new Date(), lastSeen: new Date(), isActive: true,
+    fingerprint: {
+      hash: typeof data.fingerprint === 'string' ? data.fingerprint : undefined,
+      deviceId: (ip || '').replace(/\./g, '').substr(0, 8)
+    }
+  }
+
   if (mongoose.connection.readyState === 1) {
     try {
       await Session.findOneAndUpdate(
         { sessionId },
-        {
-          sessionId, username: data.username,
-          role: role.toUpperCase(), ip,
-          country: data.country || 'India', city: data.city || 'Vadodara',
-          lat: parseFloat(data.lat) || 22.3072, lng: parseFloat(data.lng) || 73.1812,
-          browser: data.browser || 'Browser', os: data.os || 'Desktop',
-          state: 'NORMAL', riskScore: 0,
-          isHoneypotTrap: false,
-          loginTime: new Date(), isActive: true,
-          fingerprint: {
-            hash: typeof data.fingerprint === 'string' ? data.fingerprint : undefined,
-            deviceId: (ip || '').replace(/\./g, '').substr(0, 8)
-          }
-        },
+        sessionDoc,
         { upsert: true, new: true }
       )
     } catch (e) {
       logger.warn(`[REGISTER REAL DB ERROR] ${e.message}`)
     }
   }
-  return res.json({ success: true, sessionId, trapped: false, role })
+
+  const broadcastPayload = {
+    sessionId, id: sessionId, username: data.username,
+    role: role.toUpperCase(), ip,
+    country: data.country || 'India', city: data.city || 'Vadodara',
+    lat: parseFloat(data.lat) || 22.3072, lng: parseFloat(data.lng) || 73.1812,
+    browser: data.browser || 'Browser', os: data.os || 'Desktop',
+    state: 'NORMAL', riskScore: 0,
+    isHoneypotTrap: false,
+    isPrivateBrowser: isPrivate,
+    isActive: true, lastSeen: new Date().toISOString(),
+    timestamp: new Date().toISOString()
+  }
+  broadcast('session_registered', broadcastPayload)
+  broadcast('session_updated', broadcastPayload)
+  return res.json({ success: true, sessionId, trapped: false, role, isPrivateBrowser: isPrivate })
 }
 
 const registerTrapSession = async (res, data, ip) => {
   const sessionId = `TRAP-${data.username}-${Date.now()}`
+  const isPrivate = Boolean(data.isPrivateBrowser)
+  const trapDoc = {
+    sessionId, username: data.username,
+    role: 'ATTACKER', ip,
+    country: data.country || 'India', city: data.city || 'Vadodara',
+    lat: parseFloat(data.lat) || 22.3072, lng: parseFloat(data.lng) || 73.1812,
+    browser: data.browser || 'Browser', os: data.os || 'Desktop',
+    state: 'ATTACKER', riskScore: 60,
+    isHoneypotTrap: true,
+    isPrivateBrowser: isPrivate,
+    loginTime: new Date(), lastSeen: new Date(), isActive: true,
+    fingerprint: {
+      hash: typeof data.fingerprint === 'string' ? data.fingerprint : undefined,
+      deviceId: (ip || '').replace(/\./g, '').substr(0, 8)
+    },
+    timeline: [{ timestamp: new Date(), action: 'TRAP_LOGIN', detail: `Trapped in honeypot deception` }]
+  }
+
   if (mongoose.connection.readyState === 1) {
     try {
       await Session.findOneAndUpdate(
         { sessionId },
-        {
-          sessionId, username: data.username,
-          role: 'ATTACKER', ip,
-          country: data.country || 'India', city: data.city || 'Vadodara',
-          lat: parseFloat(data.lat) || 22.3072, lng: parseFloat(data.lng) || 73.1812,
-          browser: data.browser || 'Browser', os: data.os || 'Desktop',
-          state: 'ATTACKER', riskScore: 60,
-          isHoneypotTrap: true,
-          loginTime: new Date(), isActive: true,
-          fingerprint: {
-            hash: typeof data.fingerprint === 'string' ? data.fingerprint : undefined,
-            deviceId: (ip || '').replace(/\./g, '').substr(0, 8)
-          },
-          timeline: [{ timestamp: new Date(), action: 'TRAP_LOGIN', detail: `Trapped after brute force` }]
-        },
+        trapDoc,
         { upsert: true, new: true }
       )
     } catch (e) {
       logger.warn(`[REGISTER TRAP DB ERROR] ${e.message}`)
     }
   }
-  broadcast('new_session', {
-    sessionId, username: data.username, role: 'ATTACKER',
-    ip, state: 'ATTACKER', riskScore: 60, isHoneypotTrap: true,
+
+  const trapPayload = {
+    sessionId, id: sessionId, username: data.username, role: 'ATTACKER',
+    ip, country: data.country || 'India', city: data.city || 'Vadodara',
+    lat: parseFloat(data.lat) || 22.3072, lng: parseFloat(data.lng) || 73.1812,
+    browser: data.browser || 'Browser', os: data.os || 'Desktop',
+    state: 'ATTACKER', riskScore: 60, isHoneypotTrap: true,
+    isPrivateBrowser: isPrivate,
+    isActive: true, lastSeen: new Date().toISOString(),
     timestamp: new Date().toISOString()
-  })
+  }
+  broadcast('session_registered', trapPayload)
+  broadcast('session_updated', trapPayload)
+  broadcast('new_session', trapPayload)
   // Lie to attacker — tell them login succeeded
-  return res.json({ success: true, sessionId, trapped: true, role: 'user' })
+  return res.json({ success: true, sessionId, trapped: true, role: 'user', isPrivateBrowser: isPrivate })
 }
 
 // GET /api/session/init — detect real IP + geo + device
@@ -133,7 +165,11 @@ router.post('/register', async (req, res) => {
     const ip = req.clientIP || data.ip || req.ip
 
     // VPN Auto-Block check
-    const reputation = checkIPReputation(ip)
+    const reputation = checkIPReputation(ip, {
+      simulateVPN: Boolean(data.simulateVPN || data.isVPN),
+      publicIP: data.publicIP || data.ip,
+      headers: req.headers
+    })
     if (reputation.suspicious) {
       if (mongoose.connection.readyState === 1) {
         try {
@@ -328,7 +364,10 @@ router.post('/attack', async (req, res) => {
     }
 
     // Check 4: Real-time IP reputation on EVERY attack (mid-session auto block if VPN/proxy)
-    const reputation = await checkIPReputation(sourceIP)
+    const reputation = await checkIPReputation(sourceIP, {
+      simulateVPN: Boolean(req.body.simulateVPN || req.body.isVPN),
+      headers: req.headers
+    })
     if (reputation.suspicious) {
       logger.warn(`[VPN ATTACK] ${sourceIP} is ${reputation.label} — auto-blocking mid-session`)
       if (mongoose.connection.readyState === 1) {
@@ -376,7 +415,8 @@ router.post('/attack', async (req, res) => {
     }
 
     const adversaryName = username || `Adversary (${sourceIP || 'Remote'})`
-    let session = { sessionId, username: adversaryName, role: 'ATTACKER', ip: sourceIP || 'Unknown', country: sourceCountry || 'Unknown', city: sourceCity || 'Unknown', lat: sourceLat || 0, lng: sourceLng || 0, riskScore: 85, state: 'ATTACKER' }
+    const isPrivate = Boolean(req.body.isPrivateBrowser)
+    let session = { sessionId, username: adversaryName, role: 'ATTACKER', ip: sourceIP || 'Unknown', country: sourceCountry || 'Unknown', city: sourceCity || 'Unknown', lat: sourceLat || 0, lng: sourceLng || 0, riskScore: 85, state: 'ATTACKER', isPrivateBrowser: isPrivate }
     let attack = { attackId: `ATK-${Date.now()}`, type: attackDef.label || attackType || 'Attack', severity: attackDef.severity || 'MEDIUM', sourceIP, sourceCountry, sourceCity, sourceLat, sourceLng, targetArea: attackDef.target || '/system', timestamp: new Date().toISOString() }
 
     if (mongoose.connection.readyState === 1) {
@@ -390,6 +430,7 @@ router.post('/attack', async (req, res) => {
             state: 'ATTACKER', riskScore: 85, isActive: true,
             fingerprintHash: fingerprint || null,
             ipReputation: reputation,
+            isPrivateBrowser: isPrivate,
             loginTime: new Date(),
             lastSeen: new Date()
           })
@@ -417,6 +458,7 @@ router.post('/attack', async (req, res) => {
             lng: sourceLng || dbSession.lng,
             fingerprintHash: fingerprint || dbSession.fingerprintHash || null,
             ipReputation: reputation,
+            isPrivateBrowser: isPrivate || dbSession.isPrivateBrowser,
             $addToSet: { attackTypes: attackDef.label || attackType || 'Attack' },
             $inc: { attackCount: 1 },
             $push: { timeline: { timestamp: new Date(), action: 'ATTACK', detail: `${attackDef.label || attackType} from ${sourceIP || dbSession.ip} (${sourceCity || dbSession.city}, ${sourceCountry || dbSession.country}) → ${attackDef.target || '/system'}`, severity: attackDef.severity || 'MEDIUM' } },

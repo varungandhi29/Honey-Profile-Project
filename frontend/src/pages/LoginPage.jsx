@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-import { Shield, Lock, User } from 'lucide-react';
+import { Shield, Lock, User, EyeOff, Globe } from 'lucide-react';
+import { detectPrivateBrowser } from '../utils/fingerprint';
 
 const NeuralBackground = () => {
   const canvasRef = useRef(null);
@@ -105,13 +106,23 @@ export default function LoginPage({ onLogin, loginError }) {
   });
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [isPrivate, setIsPrivate] = useState(false);
+  const [simulateVPN, setSimulateVPN] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    detectPrivateBrowser().then(res => {
+      if (mounted) setIsPrivate(res);
+    });
+    return () => { mounted = false; };
+  }, []);
 
   const handleLogin = async (e) => {
     if (e) e.preventDefault();
     if (!username.trim() || !password.trim() || loading) return;
     setLoading(true);
     try {
-      await onLogin({ username: username.trim(), password: password.trim() });
+      await onLogin({ username: username.trim(), password: password.trim(), simulateVPN });
     } finally {
       setLoading(false);
     }
@@ -153,7 +164,45 @@ export default function LoginPage({ onLogin, loginError }) {
         <h1 style={{ color: '#E6EDF3', fontSize: '24px', fontWeight: 'bold', marginBottom: '8px', letterSpacing: '1px' }}>
           HONEYSHIELD V2
         </h1>
-        <p style={{ color: '#8B949E', marginBottom: '30px', fontSize: '14px' }}>Secure Deception & Intelligence Platform</p>
+        <p style={{ color: '#8B949E', marginBottom: '20px', fontSize: '14px' }}>Secure Deception & Intelligence Platform</p>
+
+        {/* Stealth / Private Browser Indicator */}
+        {isPrivate ? (
+          <div style={{
+            background: 'rgba(163, 113, 247, 0.15)',
+            border: '1px solid rgba(163, 113, 247, 0.4)',
+            color: '#D2A8FF',
+            padding: '8px 12px',
+            borderRadius: '8px',
+            marginBottom: '18px',
+            fontSize: '12px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '8px',
+            fontWeight: 600
+          }}>
+            <EyeOff size={16} />
+            <span>🕵️ Incognito / Private Browser Detected (Stealth Mode)</span>
+          </div>
+        ) : (
+          <div style={{
+            background: 'rgba(56, 139, 253, 0.08)',
+            border: '1px solid rgba(56, 139, 253, 0.2)',
+            color: '#79C0FF',
+            padding: '6px 10px',
+            borderRadius: '6px',
+            marginBottom: '16px',
+            fontSize: '11px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '6px'
+          }}>
+            <Globe size={13} />
+            <span>Standard Browsing Mode (Open Incognito to test stealth tracking)</span>
+          </div>
+        )}
 
         {loginError && (
           <div style={{ background: 'rgba(255, 68, 68, 0.1)', border: '1px solid #FF4444', color: '#FF4444', padding: '10px', borderRadius: '8px', marginBottom: '20px', fontSize: '14px' }}>
@@ -183,7 +232,7 @@ export default function LoginPage({ onLogin, loginError }) {
           />
         </div>
 
-        <div style={{ marginBottom: '24px', position: 'relative' }}>
+        <div style={{ marginBottom: '16px', position: 'relative' }}>
           <Lock style={{ position: 'absolute', top: '12px', left: '12px', color: '#8B949E' }} size={20} />
           <input
             type="password"
@@ -204,6 +253,39 @@ export default function LoginPage({ onLogin, loginError }) {
             onFocus={(e) => e.target.style.borderColor = '#00FF88'}
             onBlur={(e) => e.target.style.borderColor = '#30363D'}
           />
+        </div>
+
+        {/* Simulate VPN Route Toggle */}
+        <div 
+          onClick={() => setSimulateVPN(!simulateVPN)}
+          style={{
+            marginBottom: '20px',
+            padding: '10px 12px',
+            background: simulateVPN ? 'rgba(255, 153, 0, 0.15)' : 'rgba(22, 27, 34, 0.7)',
+            border: `1px solid ${simulateVPN ? '#FF9900' : '#30363D'}`,
+            borderRadius: '8px',
+            textAlign: 'left',
+            transition: 'all 0.2s',
+            cursor: 'pointer'
+          }}
+        >
+          <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', margin: 0 }}>
+            <input
+              type="checkbox"
+              checked={simulateVPN}
+              onChange={(e) => setSimulateVPN(e.target.checked)}
+              onClick={(e) => e.stopPropagation()}
+              style={{ accentColor: '#FF9900', width: '16px', height: '16px', cursor: 'pointer' }}
+            />
+            <div>
+              <div style={{ color: simulateVPN ? '#FF9900' : '#E6EDF3', fontSize: '12px', fontWeight: 700 }}>
+                🛡️ Route via Simulated VPN / Proxy
+              </div>
+              <div style={{ color: '#8B949E', fontSize: '10px' }}>
+                Triggers HoneyShield Auto-VPN detection & instant containment
+              </div>
+            </div>
+          </label>
         </div>
 
         <button

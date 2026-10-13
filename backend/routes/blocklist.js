@@ -90,8 +90,19 @@ router.post('/', requireAdmin, async (req, res) => {
           { upsert: true, new: true }
         )
 
+        const matchCriteria = [
+          { ip },
+          ...(sessionId ? [{ sessionId }] : []),
+          ...(username ? [{ username }] : [])
+        ]
+
         const sessions = await Session.updateMany(
-          { ip, role: { $ne: 'ADMIN' }, username: { $ne: 'admin' }, isActive: true },
+          {
+            $or: matchCriteria,
+            role: { $ne: 'ADMIN' },
+            username: { $ne: 'admin' },
+            isActive: true
+          },
           { isActive: false, isBlocked: true, logoutTime: new Date() }
         )
         terminatedCount = sessions.modifiedCount
@@ -139,18 +150,20 @@ router.post('/', requireAdmin, async (req, res) => {
     }
 
     // After saving block, broadcast session_blocked immediately to enforce real-time block
-    const sessionToNotify = session || await Session.findOne({ ip, isActive: true }).catch(() => null)
+    const sessionToNotify = session || await Session.findOne({ $or: [{ ip }, ...(sessionId ? [{ sessionId }] : []), ...(username ? [{ username }] : [])] }).catch(() => null)
     broadcast('session_blocked', {
-      sessionId: sessionToNotify?.sessionId,
+      sessionId: sessionId || sessionToNotify?.sessionId,
       ip,
       subnetPrefix,
       hardwareFingerprint,
-      username: sessionToNotify?.username,
+      username: username || sessionToNotify?.username,
       reason: req.body.reason || 'Blocked by admin',
       timestamp: new Date().toISOString()
     })
     broadcast('ip_blocked', {
       ip,
+      sessionId: sessionId || sessionToNotify?.sessionId,
+      username: username || sessionToNotify?.username,
       subnetPrefix,
       hardwareFingerprint,
       blockedBy: adminUsername,

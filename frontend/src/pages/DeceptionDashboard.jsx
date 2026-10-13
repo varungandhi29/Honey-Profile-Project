@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { LogOut, Folder, Users, Server, FileText, Settings, Download, Search, AlertCircle, Activity, Database, Terminal, ShieldAlert } from 'lucide-react';
 import { DECEPTION_NAV, FAKE_FILES, FAKE_EMPLOYEES, FAKE_SERVERS, FAKE_REPORTS, LOG_CONTENT } from '../engine/constants';
 import BlockedScreen from '../components/BlockedScreen';
+import { honeyBus } from '../utils/honeyBus';
 
 // ============================================================================
 // FAKE PAGES COMPONENTS
@@ -1371,6 +1372,39 @@ export default function DeceptionDashboard({ currentUser, onLogout, onAttackerAc
   const [blockedReason, setBlockedReason] = useState(null)
   const [showBlockedModal, setShowBlockedModal] = useState(false)
 
+  useEffect(() => {
+    const checkBlocked = () => {
+      try {
+        const saved = localStorage.getItem('honeyshield_blocked')
+        if (saved && JSON.parse(saved)?.blocked) {
+          const parsed = JSON.parse(saved)
+          setIsBlocked(true)
+          setBlockedReason(parsed.reason || 'SOC_CONTAINMENT')
+          setShowBlockedModal(true)
+        }
+      } catch {}
+    }
+    checkBlocked()
+
+    const unsub = honeyBus.subscribe((e) => {
+      if (e.type === 'BLOCK_IP' || e.type === 'CLIENT_BLOCKED') {
+        const payload = e.payload || {}
+        setIsBlocked(true)
+        setBlockedReason(payload.reason || 'SOC_CONTAINMENT')
+        setShowBlockedModal(true)
+      } else if (e.type === 'UNBLOCK_IP' || e.type === 'CLIENT_UNBLOCKED') {
+        setIsBlocked(false)
+        setShowBlockedModal(false)
+      }
+    })
+
+    const interval = setInterval(checkBlocked, 2000)
+    return () => {
+      unsub()
+      clearInterval(interval)
+    }
+  }, [])
+
   const triggerAttack = useCallback(async (actionType) => {
     console.log('[DECEPTION] triggerAttack called:', actionType)
     if (typeof onAttackerAction === 'function') {
@@ -1573,6 +1607,11 @@ export default function DeceptionDashboard({ currentUser, onLogout, onAttackerAc
           <div style={{ fontSize:'15px', fontWeight:700, color:'#E6EDF3' }}>{activePage}</div>
           
           <div style={{ display:'flex', alignItems:'center', gap:'16px' }}>
+            {currentUser?.isPrivateBrowser && (
+              <div style={{ padding:'5px 10px', background:'rgba(163, 113, 247, 0.15)', color:'#D2A8FF', border:'1px solid rgba(163, 113, 247, 0.4)', borderRadius:'4px', fontSize:'11px', fontWeight:700, display:'flex', alignItems:'center', gap:'4px' }}>
+                <span>🕵️</span> INCOGNITO STEALTH ACTIVE
+              </div>
+            )}
             <div style={{ padding:'5px 10px', background:'rgba(255,68,68,0.1)', color:'#FF4444', border:'1px solid rgba(255,68,68,0.2)', borderRadius:'4px', fontSize:'11px', fontWeight:700 }}>
               SYSTEM ACTIVE · ACCESS GRANTED
             </div>

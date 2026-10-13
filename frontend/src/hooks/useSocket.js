@@ -28,7 +28,7 @@ export const useSocket = (props = {}, legacyAddToast, legacyOnBlocked) => {
 
   useEffect(() => {
     const socket = io(BACKEND, {
-      transports: ['websocket'],
+      transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionAttempts: 20,
       reconnectionDelay: 2000,
@@ -74,6 +74,7 @@ export const useSocket = (props = {}, legacyAddToast, legacyOnBlocked) => {
       }
     })
     socket.on('session_registered', data => handlersRef.current.onSessionUpdate?.(data))
+    socket.on('new_session', data => handlersRef.current.onSessionUpdate?.(data))
     socket.on('honey_interaction', data => handlersRef.current.onHoney?.(data))
     socket.on('auto_response', data => handlersRef.current.onAutoResponse?.(data))
     socket.on('session_removed', data => handlersRef.current.onSessionRemoved?.(data))

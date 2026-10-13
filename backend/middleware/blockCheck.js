@@ -5,13 +5,24 @@ import logger from './logger.js'
 
 export const checkBlockStatus = async (req, res, next) => {
   try {
-    const ip = req.body?.ip || req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || req.connection?.remoteAddress || 'Unknown'
+    const rawIP = req.body?.ip || req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || req.connection?.remoteAddress || 'Unknown'
+    const ip = rawIP.replace('::ffff:', '').trim()
     const fingerprint = req.body?.fingerprint || req.headers['x-fingerprint']
     req.clientIP = ip
     req.clientFingerprint = fingerprint
 
-    const privateRanges = ['127.','::1','localhost','0.0.0.0','192.168.','10.','172.16.','172.17.']
-    if (privateRanges.some(p => ip.startsWith(p) || ip === p)) return next()
+    // Admin Exemption: Authenticated administrators are never blocked
+    try {
+      const authHeader = req.headers['authorization'] || ''
+      if (authHeader.startsWith('Bearer ')) {
+        const token = authHeader.slice(7).trim()
+        const cacheService = await import('../services/cacheService.js')
+        const adminSession = await cacheService.cache.get(`admin:session:${token}`)
+        if (adminSession) {
+          return next()
+        }
+      }
+    } catch {}
 
     let cache = null
     try {

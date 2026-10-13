@@ -28,13 +28,52 @@ const isInCidr = (ip, cidr) => {
   } catch { return false }
 }
 
-export const checkIPReputation = (ip) => {
-  if (!ip) return { suspicious: false, reason: null, riskBonus: 0 }
-  if (PRIVATE_RANGES.some(p => ip.startsWith(p))) return { suspicious: false, reason: 'PRIVATE_IP', riskBonus: 0 }
-  if (TOR_EXIT_NODES.has(ip)) return { suspicious: true, reason: 'TOR_EXIT_NODE', riskBonus: 40, label: 'Tor Exit Node' }
-  for (const range of DATACENTER_RANGES) {
-    if (isInCidr(ip, range)) return { suspicious: true, reason: 'DATACENTER_IP', riskBonus: 25, label: 'Datacenter/VPN IP' }
+export const checkIPReputation = (ip, options = {}) => {
+  // 1. Simulation flag / header check for instant viva demonstration
+  if (
+    options.simulateVPN ||
+    options.isVPN ||
+    options.headers?.['x-simulate-vpn'] === 'true' ||
+    options.headers?.['x-vpn-test'] === 'true'
+  ) {
+    return {
+      suspicious: true,
+      reason: 'VPN_PROXY_DETECTED',
+      riskBonus: 35,
+      label: 'VPN / Datacenter Proxy'
+    }
   }
+
+  if (!ip) return { suspicious: false, reason: null, riskBonus: 0 }
+
+  // 2. Tor exit nodes
+  if (TOR_EXIT_NODES.has(ip)) {
+    return { suspicious: true, reason: 'TOR_EXIT_NODE', riskBonus: 40, label: 'Tor Exit Node' }
+  }
+
+  // 3. Datacenter / Cloud ranges (AWS, Azure, GCP, Cloudflare, etc.)
+  for (const range of DATACENTER_RANGES) {
+    if (isInCidr(ip, range)) {
+      return { suspicious: true, reason: 'DATACENTER_IP', riskBonus: 25, label: 'Datacenter / VPN IP' }
+    }
+  }
+
+  // 4. Check candidate public IP if provided in options
+  if (options.publicIP && options.publicIP !== ip && !isPrivateIP(options.publicIP)) {
+    if (TOR_EXIT_NODES.has(options.publicIP)) {
+      return { suspicious: true, reason: 'TOR_EXIT_NODE', riskBonus: 40, label: 'Tor Exit Node' }
+    }
+    for (const range of DATACENTER_RANGES) {
+      if (isInCidr(options.publicIP, range)) {
+        return { suspicious: true, reason: 'DATACENTER_IP', riskBonus: 25, label: 'Datacenter / VPN IP' }
+      }
+    }
+  }
+
+  if (PRIVATE_RANGES.some(p => ip.startsWith(p))) {
+    return { suspicious: false, reason: 'PRIVATE_IP', riskBonus: 0 }
+  }
+
   return { suspicious: false, reason: null, riskBonus: 0 }
 }
 export const isPrivateIP = (ip) => PRIVATE_RANGES.some(p => ip?.startsWith(p))

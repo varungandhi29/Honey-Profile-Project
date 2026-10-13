@@ -105,3 +105,64 @@ const getInstalledFonts = async () => {
     return detected
   } catch { return [] }
 }
+
+/**
+ * Detects if the current user agent is running in Incognito / Private Browsing mode.
+ * Evaluates storage quotas, service worker restrictions, and browser-specific sandboxes.
+ */
+export const detectPrivateBrowser = async () => {
+  try {
+    if (typeof window === 'undefined') return false
+
+    // 0. Explicit URL override for live testing (e.g. ?private=1 or ?incognito=1)
+    try {
+      const urlParams = new URLSearchParams(window.location.search)
+      if (urlParams.get('private') === '1' || urlParams.get('incognito') === '1') {
+        return true
+      }
+    } catch {}
+
+    // 1. Chromium-based browsers (Chrome, Edge, Brave, Opera)
+    // Incognito strictly limits storage quota (< 150MB), whereas standard mode grants gigabytes.
+    if (navigator.storage && navigator.storage.estimate) {
+      const { quota } = await navigator.storage.estimate()
+      if (quota && quota < 150 * 1024 * 1024) {
+        return true
+      }
+    }
+
+    // 2. Firefox: serviceWorker is null/undefined in Private Browsing
+    if ('MozAppearance' in (document.documentElement?.style || {})) {
+      if (!navigator.serviceWorker) {
+        return true
+      }
+    }
+
+    // 3. WebKit FileSystem check (Chrome/Blink legacy fallback)
+    if (window.webkitRequestFileSystem) {
+      const isPrivate = await new Promise((resolve) => {
+        window.webkitRequestFileSystem(
+          window.TEMPORARY,
+          100,
+          () => resolve(false),
+          () => resolve(true)
+        )
+      })
+      if (isPrivate) return true
+    }
+
+    // 4. Safari Private Browsing check
+    const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent)
+    if (isSafari && window.openDatabase) {
+      try {
+        window.openDatabase(null, null, null, null)
+      } catch {
+        return true
+      }
+    }
+  } catch (err) {
+    console.warn('[Private Mode Detection] Error:', err)
+  }
+  return false
+}
+

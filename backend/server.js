@@ -224,4 +224,4 @@ app.get('*', (req, res, next) => {
 
 app.use((err, req, res, next) => { logger.error(`Unhandled: ${err.message}`); res.status(500).json({ error: 'Internal server error' }) })
 
-httpServer.listen(process.env.PORT || 3001, () => logger.info(`[SERVER] Running on http://localhost:${process.env.PORT || 3001}`))
+httpServer.listen(process.env.PORT || 3001, '0.0.0.0', () => logger.info(`[SERVER] Running on http://0.0.0.0:${process.env.PORT || 3001}`))

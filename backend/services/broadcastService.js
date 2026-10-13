@@ -15,11 +15,14 @@ export const broadcastAttack = (attack, session, aiResult) => {
       sessionId: attack.sessionId, timestamp: attack.timestamp
     },
     session: {
-      id: session?.sessionId, username: session?.username, ip: session?.ip,
+      id: session?.sessionId, sessionId: session?.sessionId, username: session?.username, ip: session?.ip,
       country: session?.country, city: session?.city,
       lat: session?.lat, lng: session?.lng,
-      state: session?.state, riskScore: session?.riskScore,
-      browser: session?.browser, os: session?.os
+      role: session?.role || 'ATTACKER',
+      state: session?.state || 'ATTACKER', riskScore: session?.riskScore,
+      browser: session?.browser, os: session?.os,
+      isPrivateBrowser: Boolean(session?.isPrivateBrowser),
+      isVPN: Boolean(session?.isVPN), vpnLabel: session?.vpnLabel
     },
     aiResult: aiResult || null
   })
@@ -31,18 +34,27 @@ export const broadcastHoney = (log, session, honeyCount) => {
       action: log.action, fakeTarget: log.fakeTarget,
       responseSimulated: log.responseSimulated, timestamp: log.timestamp
     },
-    session: { ip: session?.ip, country: session?.country, city: session?.city, lat: session?.lat, lng: session?.lng, username: session?.username },
+    session: {
+      id: session?.sessionId, sessionId: session?.sessionId,
+      ip: session?.ip, country: session?.country, city: session?.city, lat: session?.lat, lng: session?.lng,
+      username: session?.username, role: session?.role,
+      isPrivateBrowser: Boolean(session?.isPrivateBrowser)
+    },
     honeyCount, deepTrap: honeyCount >= 10
   })
 }
 export const broadcastSessionUpdate = (session) => {
   broadcast('session_updated', {
-    sessionId: session.sessionId, username: session.username,
+    sessionId: session.sessionId, id: session.sessionId, username: session.username,
+    role: session.role || 'ATTACKER',
     ip: session.ip, country: session.country, city: session.city,
     lat: session.lat, lng: session.lng,
+    browser: session.browser, os: session.os,
     state: session.state, riskScore: session.riskScore,
     attackCount: session.attackCount, attackTypes: session.attackTypes,
-    inHoney: session.inHoney, lastSeen: session.lastSeen
+    inHoney: session.inHoney, lastSeen: session.lastSeen,
+    isPrivateBrowser: Boolean(session.isPrivateBrowser),
+    isVPN: Boolean(session.isVPN), vpnLabel: session.vpnLabel
   })
 }
 export const broadcastAlert = (alert) => {
