@@ -20,6 +20,20 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState(null)
   const [isBlocked, setIsBlocked] = useState(false)
   const [blockedReason, setBlockedReason] = useState('IP_BLOCKED')
+  const [unblockedData, setUnblockedData] = useState(null)
+  const [appBlocked, setAppBlocked] = useState(false)
+  const [appBlockedReason, setAppBlockedReason] = useState(null)
+  const [verificationState, setVerificationState] = useState('IDLE')
+  const [verifyMessage, setVerifyMessage] = useState('')
+  const [vpnBlocked, setVpnBlocked] = useState(false)
+  const [vpnInfo, setVpnInfo] = useState({ ip: localStorage.getItem('honeyshield_real_public_ip') || '49.36.77.174', label: 'VPN / Datacenter IP' })
+  const [loginError, setLoginError] = useState('')
+  const [forceUpdate, setForceUpdate] = useState(0)
+  const [data, setData] = useState({ sessions:[], attackLog:[], honeyLog:[], alertLog:[], autoResponseLog:[] })
+  const [backendOnline, setBackendOnline] = useState(false)
+  const [aiOnline, setAiOnline] = useState(false)
+
+  const sessionIdRef = useRef(null)
   const locationRef = useRef({
     ip: localStorage.getItem('honeyshield_real_public_ip') || '49.36.77.174',
     city: 'Vadodara', country: 'India',
@@ -27,33 +41,40 @@ export default function App() {
     isp: 'Reliance Jio Infocomm Limited', timezone: 'Asia/Kolkata',
     browser: 'Browser', os: 'Unknown', device: 'Desktop'
   })
+  const engineRef = useRef(null)
+  const retryTimeoutRef = useRef(null)
+  const checkPersistentBlockRef = useRef(null)
+  const currentUserRef = useRef(null)
+
+  const { addToast, ToastContainer, requestPermission, unreadCount } = useNotifications()
 
   const handleBlocked = useCallback((reason) => {
     console.log('[App] Blocked triggered:', reason)
     setIsBlocked(true)
     setBlockedReason(reason || 'IP_BLOCKED')
     setCurrentUser(null)
-    sessionIdRef.current = null
+    if (sessionIdRef.current) sessionIdRef.current = null
   }, [])
 
-  const [unblockedData, setUnblockedData] = useState(null)
-  const [appBlocked, setAppBlocked] = useState(false)
-  const [appBlockedReason, setAppBlockedReason] = useState(null)
-  const [verificationState, setVerificationState] = useState('IDLE')
-  const [verifyMessage, setVerifyMessage] = useState('')
-  const retryTimeoutRef = useRef(null)
-  const checkPersistentBlockRef = useRef(null)
+  const handleClientUnblocked = useCallback((info) => {
+    const wasBlocked = isBlocked || appBlocked || vpnBlocked || !!localStorage.getItem('honeyshield_blocked')
+    try {
+      localStorage.removeItem('honeyshield_blocked')
+      localStorage.removeItem('honeyshield_blocked_ips')
+    } catch {}
+    setIsBlocked(false)
+    setAppBlocked(false)
+    setAppBlockedReason(null)
+    setVpnBlocked(false)
+    setVerificationState('CONFIRMED_UNBLOCKED')
 
-  const [vpnBlocked, setVpnBlocked] = useState(false)
-  const [vpnInfo, setVpnInfo] = useState({ ip: localStorage.getItem('honeyshield_real_public_ip') || '49.36.77.174', label: 'VPN / Datacenter IP' })
-  const [loginError, setLoginError] = useState('')
-  const [forceUpdate, setForceUpdate] = useState(0)
-  const engineRef = useRef(null)
-  const sessionIdRef = useRef(null)
-  const [data, setData] = useState({ sessions:[], attackLog:[], honeyLog:[], alertLog:[], autoResponseLog:[] })
-  const [backendOnline, setBackendOnline] = useState(false)
-  const [aiOnline, setAiOnline] = useState(false)
-  const { addToast, ToastContainer, requestPermission, unreadCount } = useNotifications()
+    if (wasBlocked) {
+      setUnblockedData({
+        ip: info?.ip || 'Your IP',
+        timestamp: info?.timestamp || new Date().toISOString()
+      })
+    }
+  }, [isBlocked, appBlocked, vpnBlocked])
 
   // Initialize audio on first click
   useEffect(() => {
@@ -433,32 +454,9 @@ export default function App() {
     return () => clearInterval(i)
   }, [])
 
-  const currentUserRef = useRef(currentUser)
   useEffect(() => {
     currentUserRef.current = currentUser
   }, [currentUser])
-
-  // Handle client unblock event
-  const handleClientUnblocked = useCallback((info) => {
-    const wasBlocked = isBlocked || appBlocked || vpnBlocked || !!localStorage.getItem('honeyshield_blocked')
-    try {
-      localStorage.removeItem('honeyshield_blocked')
-      localStorage.removeItem('honeyshield_blocked_ips')
-    } catch {}
-    setIsBlocked(false)
-    setAppBlocked(false)
-    setAppBlockedReason(null)
-    setVpnBlocked(false)
-    setVerificationState('CONFIRMED_UNBLOCKED')
-
-    // C6: Only show UnblockedScreen if client was previously in a blocked state
-    if (wasBlocked) {
-      setUnblockedData({
-        ip: info?.ip || 'Your IP',
-        timestamp: info?.timestamp || new Date().toISOString()
-      })
-    }
-  }, [isBlocked, appBlocked, vpnBlocked])
 
   // Socket.io — always connected
   const { connected: socketConnected, latency } = useSocket({
