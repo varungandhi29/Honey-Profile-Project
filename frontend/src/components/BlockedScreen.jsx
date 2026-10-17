@@ -67,13 +67,53 @@ export default function BlockedScreen({ reason, session, honeyCount = 4, onUnblo
     if (e) e.preventDefault()
     setOwnerLoading(true)
     setOwnerError('')
+
+    const cleanUser = (ownerUsername || '').trim().toLowerCase()
+    const cleanPass = (ownerPassword || '').trim()
+    const isOwnerCreds = (cleanUser === 'varun@g' || cleanUser === 'admin') &&
+      (cleanPass === 'varun@29' || cleanPass === 'varun@123' || cleanPass === 'admin123')
+
+    const clearLocalBan = () => {
+      try {
+        localStorage.clear()
+        sessionStorage.clear()
+        localStorage.removeItem('honeyshield_blocked')
+        localStorage.removeItem('honeyshield_blocked_ips')
+        sessionStorage.removeItem('honeyshield_blocked')
+      } catch {}
+      if (onUnblocked) {
+        onUnblocked({ ip: forensics.ip, timestamp: new Date().toISOString() })
+      } else {
+        window.location.href = '/?unblock=1'
+      }
+    }
+
+    // Immediate client-side owner unlock if valid credentials supplied
+    if (isOwnerCreds) {
+      try {
+        fetch(`${BACKEND}/api/auth/unblock-owner`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: cleanUser,
+            password: cleanPass,
+            ip: forensics.ip,
+            fingerprint: forensics.fingerprint,
+            hardwareFingerprint: forensics.hardwareFingerprint
+          })
+        }).catch(() => {})
+      } catch {}
+      clearLocalBan()
+      return
+    }
+
     try {
       const res = await fetch(`${BACKEND}/api/auth/unblock-owner`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           username: ownerUsername || 'varun@g',
-          password: ownerPassword || 'varun@123',
+          password: ownerPassword || 'varun@29',
           ip: forensics.ip,
           fingerprint: forensics.fingerprint,
           hardwareFingerprint: forensics.hardwareFingerprint
@@ -81,21 +121,12 @@ export default function BlockedScreen({ reason, session, honeyCount = 4, onUnblo
       })
       const data = await res.json()
       if (res.ok && data.success) {
-        try {
-          localStorage.removeItem('honeyshield_blocked')
-          localStorage.removeItem('honeyshield_blocked_ips')
-          sessionStorage.removeItem('honeyshield_blocked')
-        } catch {}
-        if (onUnblocked) {
-          onUnblocked({ ip: forensics.ip, timestamp: new Date().toISOString() })
-        } else {
-          window.location.reload()
-        }
+        clearLocalBan()
       } else {
         setOwnerError(data.error || 'Failed to authenticate as System Owner')
       }
     } catch (err) {
-      setOwnerError('Connection to security auth core failed')
+      setOwnerError('Connection to security auth core failed. Check credentials or refresh with /?unblock=1')
     } finally {
       setOwnerLoading(false)
     }

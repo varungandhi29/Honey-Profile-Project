@@ -1,8 +1,10 @@
 /**
  * Dynamic Backend URL Resolver
  * Ensures localhost always connects to local backend port 3001,
- * and hosted deployments use their configured domain or window.location.origin.
+ * and hosted deployments use their configured domain or Railway backend.
  */
+const PROD_BACKEND = 'https://honey-profile-project-production.up.railway.app'
+
 export const getBackendUrl = () => {
   if (typeof window !== 'undefined') {
     const { hostname, port, origin, protocol } = window.location
@@ -24,14 +26,23 @@ export const getBackendUrl = () => {
       if (savedBackend) return savedBackend
     } catch {}
 
-    // 3. Same-origin (e.g. backend serving frontend on port 3001, or reverse proxy / production domain)
-    if (port === '3001' || (!port && (protocol === 'https:' || protocol === 'http:'))) {
+    // 3. If running on Vercel or cloud deployment, route API calls to Railway backend
+    if (hostname.includes('vercel.app') || hostname.includes('honeyprofile')) {
+      return PROD_BACKEND
+    }
+
+    // 4. If backend is serving frontend directly on port 3001
+    if (port === '3001') {
       return origin
     }
 
-    // 4. Localhost or LAN IP (e.g. 10.226.12.242, 192.168.x.x) accessing via Vite dev server
+    // 5. Localhost or LAN IP (e.g. 10.x, 192.168.x) accessing via Vite dev server
     // The backend is running on port 3001 of that same host machine
-    return `${protocol}//${hostname}:3001`
+    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname.startsWith('192.168.') || hostname.startsWith('10.')) {
+      return `${protocol}//${hostname}:3001`
+    }
+
+    return PROD_BACKEND
   }
   return import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001'
 }
