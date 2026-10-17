@@ -10,7 +10,7 @@ import { detectLocation, resolveIPLocation } from '../middleware/geoip.js'
 import { cache } from '../services/cacheService.js'
 import { calculateRisk, getState, getAIPrediction } from '../services/riskEngine.js'
 import { checkIPReputation } from '../services/ipReputationService.js'
-import { createAlert } from '../services/alertService.js'
+import { createAlert, sendAlert } from '../services/alertService.js'
 import { isAdminAuthenticated } from '../middleware/auth.js'
 import { broadcastAttack, broadcastHoney, broadcastSessionUpdate, broadcast } from '../services/broadcastService.js'
 import logger from '../middleware/logger.js'
@@ -197,6 +197,15 @@ router.post('/register', async (req, res) => {
         autoBlock: true, timestamp: new Date().toISOString()
       })
       logger.warn(`[VPN AUTO-BLOCK] ${ip} blocked as ${reputation.label}`)
+      await sendAlert({
+        type: 'VPN_PROXY_AUTO_BLOCKED',
+        severity: 'HIGH',
+        ip: req.clientIP || ip,
+        username: req.body?.username || data.username,
+        country: req.body?.country || data.country, city: req.body?.city || data.city,
+        message: `VPN/Proxy IP auto-blocked: ${reputation.label}`,
+        timestamp: new Date().toISOString()
+      }).catch(err => logger.warn(`[ALERT] Failed: ${err.message}`))
       return res.status(403).json({ error: 'Access denied', blocked: true, reason: 'VPN_PROXY_DETECTED', label: reputation.label })
     }
 
@@ -212,6 +221,17 @@ router.post('/register', async (req, res) => {
         message: `🍯 HONEY TRAP ACTIVATED: ${data.username} attempted real access — isolated in honeypot fake environment`,
         timestamp: new Date().toISOString()
       })
+      await sendAlert({
+        type: 'HONEY_TRAP_TRIGGERED',
+        severity: 'CRITICAL',
+        ip, username: data.username,
+        country: data.country, city: data.city,
+        message: `Attacker trapped: Adversary credential used for account "${data.username}"`,
+        sessionId: `TRAP-${data.username}`,
+        attemptNumber: 1,
+        playSiren: true,
+        timestamp: new Date().toISOString()
+      }).catch(err => logger.warn(`[ALERT] Failed: ${err.message}`))
       return registerTrapSession(res, data, ip)
     }
 
@@ -230,6 +250,17 @@ router.post('/register', async (req, res) => {
           message: `🍯 TRAP: ${ip} confirmed attacker — entered correct password after ${previousAttempts} failures`,
           timestamp: new Date().toISOString()
         })
+        await sendAlert({
+          type: 'HONEY_TRAP_TRIGGERED',
+          severity: 'CRITICAL',
+          ip, username: data.username,
+          country: data.country, city: data.city,
+          message: `Attacker trapped after ${previousAttempts} failures on account "${data.username}"`,
+          sessionId: `TRAP-${data.username}`,
+          attemptNumber: previousAttempts,
+          playSiren: true,
+          timestamp: new Date().toISOString()
+        }).catch(err => logger.warn(`[ALERT] Failed: ${err.message}`))
         return registerTrapSession(res, data, ip)
       }
 
@@ -266,6 +297,19 @@ router.post('/register', async (req, res) => {
       })
     }
 
+    // Add to failed login attempt tracking at HIGH_RISK level:
+    if (status.level === 'HIGH_RISK' || status.level === 'TRAP') {
+      await sendAlert({
+        type: `BRUTE_FORCE_${status.level}`,
+        severity: status.level === 'TRAP' ? 'CRITICAL' : 'HIGH',
+        ip, username: data.username,
+        country: data.country, city: data.city,
+        message: status.message,
+        attemptNumber: attemptCount,
+        timestamp: new Date().toISOString()
+      }).catch(err => logger.warn(`[ALERT] Failed: ${err.message}`))
+    }
+
     // ATTEMPT 5+ — TRAP
     if (attemptCount >= THRESHOLDS.TRAP) {
       await markIPAsTrapped(ip, data.username)
@@ -276,6 +320,19 @@ router.post('/register', async (req, res) => {
         timestamp: new Date().toISOString()
       })
       logger.warn(`[TRAP ACTIVATED] ${ip} → ${data.username}: attempt ${attemptCount}`)
+
+      await sendAlert({
+        type: 'HONEY_TRAP_TRIGGERED',
+        severity: 'CRITICAL',
+        ip, username: data.username,
+        country: data.country, city: data.city,
+        message: `Attacker trapped after ${attemptCount} brute force attempts on account "${data.username}"`,
+        sessionId: `TRAP-${data.username}`,
+        attemptNumber: attemptCount,
+        playSiren: true,
+        timestamp: new Date().toISOString()
+      }).catch(err => logger.warn(`[ALERT] Failed: ${err.message}`))
+
       // Return fake success — attacker thinks they got in
       return registerTrapSession(res, data, ip)
     }

@@ -20,6 +20,7 @@ import blocklistRoutes from './routes/blocklist.js'
 import vaultRoutes from './routes/vault.js'
 import honeypotRoutes from './routes/honeypot.js'
 import authRoutes from './routes/auth.js'
+import settingsRoutes, { loadSettingsFromDB } from './routes/settings.js'
 import { seedEmployees } from './services/employeeService.js'
 import { permanentlyBlockAttacker } from './services/attackDetectionService.js'
 import { broadcast } from './services/broadcastService.js'
@@ -107,6 +108,7 @@ app.use('/api/ai', aiRoutes)
 app.use('/api/blocklist', blocklistRoutes)
 app.use('/api/vault', requireAdmin, vaultRoutes)
 app.use('/api/auth', authRoutes)
+app.use('/api/settings', settingsRoutes)
 
 import path from 'path'
 import { fileURLToPath } from 'url'
@@ -180,6 +182,7 @@ await connectDB()
 const onDBConnected = async () => {
   logger.info('[DB] MongoDB connected and initialized')
   await seedEmployees()
+  await loadSettingsFromDB()
   // Clear stale sessions from previous runs
   const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000)
   try {

@@ -18,6 +18,7 @@ import BlockedIPsPage from './admin/BlockedIPsPage';
 import HoneyTrapsPage from './admin/HoneyTrapsPage';
 import UserManagementPage from './admin/UserManagementPage';
 import SecureVaultPage from './admin/SecureVaultPage';
+import AlertSettings from './admin/AlertSettings';
 
 class ErrorBoundary extends React.Component {
   constructor(props) {
@@ -133,6 +134,8 @@ export default function AdminDashboard({ currentUser, onLogout, data, engineRef,
       case 'Data Vault': return <SecureVaultPage currentUser={currentUser} addToast={data?.addToast} />;
       case 'Live Tracking': return <LiveTrackingPage data={safeData} onBlockIP={onBlockIP} onBlockFingerprint={onBlockFingerprint} backendOnline={backendOnline} />;
       case 'Blocked IPs': return <BlockedIPsPage data={safeData} onBlockIP={onBlockIP} onUnblockIP={onUnblockIP} onBlockFingerprint={onBlockFingerprint} onUnblockFingerprint={onUnblockFingerprint} onUnblockClient={onUnblockClient} backendOnline={backendOnline} />;
+      case 'alert-settings':
+      case 'Alert Settings': return <AlertSettings />;
       case 'Settings': return <SettingsPage settings={settings} setSettings={setSettings} data={safeData} backendOnline={backendOnline} />;
       default: return <OverviewPage data={safeData} engineRef={engineRef} currentUser={currentUser} />;
     }

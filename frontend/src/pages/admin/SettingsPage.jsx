@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Settings, Save, Volume2, Database } from 'lucide-react';
 import { alertEngine } from '../../audio/alertEngine';
 import { BACKEND } from '../../utils/backendUrl';
+import AlertSettings from './AlertSettings';
 
 const StorageInfoSection = ({ backendOnline }) => {
   const [dbStats, setDbStats] = useState(null);
@@ -128,6 +129,9 @@ export default function SettingsPage({ settings, setSettings, data, backendOnlin
         
         {/* Storage Info Section */}
         <StorageInfoSection backendOnline={backendOnline} />
+
+        {/* Alert Webhooks & One-Click Block Section */}
+        <AlertSettings />
 
         {/* Alert Audio Section */}
         <div style={{ background: '#0D1117', borderRadius: '12px', padding: '20px', border: '1px solid #30363D' }}>

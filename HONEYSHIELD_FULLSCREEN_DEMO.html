@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=1920, height=1080">
+  <title>HoneyShield v2 — Full-Screen Product Demo</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body {
+      width: 1920px;
+      height: 1080px;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background: #070B12;
+      font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+      color: #E2E8F0;
+    }
+    .hud-border {
+      border: 1px solid rgba(59, 130, 246, 0.3);
+    }
+    .glow-green {
+      box-shadow: 0 0 25px rgba(0, 255, 136, 0.25);
+    }
+    .glow-red {
+      box-shadow: 0 0 25px rgba(239, 68, 68, 0.35);
+    }
+    .glow-blue {
+      box-shadow: 0 0 25px rgba(59, 130, 246, 0.3);
+    }
+  </style>
+</head>
+<body class="flex flex-col justify-between p-12 relative select-none">
+
+  <!-- Top Global Bar -->
+  <header class="w-full flex items-center justify-between pb-6 border-b border-slate-800">
+    <div class="flex items-center gap-4">
+      <div class="w-14 h-14 rounded-2xl bg-gradient-to-tr from-emerald-500 via-blue-600 to-indigo-600 flex items-center justify-center text-3xl shadow-xl shadow-blue-500/20">
+        🛡️
+      </div>
+      <div>
+        <div class="flex items-center gap-3">
+          <h1 class="text-3xl font-extrabold text-white tracking-tight">HoneyShield V2</h1>
+          <span class="px-3 py-1 rounded-full text-xs font-mono font-bold bg-blue-500/20 text-blue-400 border border-blue-500/30">
+            ENTERPRISE SOC & DECEPTION PLATFORM
+          </span>
+        </div>
+        <p class="text-sm text-slate-400 mt-0.5">Autonomous Deception, 3D WebGL Threat Intelligence & Dynamic ML Risk Engine</p>
+      </div>
+    </div>
+
+    <!-- Active Step Badge -->
+    <div class="flex items-center gap-4 bg-slate-900/90 border border-slate-700/80 px-6 py-3 rounded-2xl">
+      <span class="flex h-3 w-3 relative">
+        <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+        <span class="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+      </span>
+      <span id="step-badge" class="text-sm font-mono font-bold text-slate-200">DEMO STAGE 1 / 6</span>
+      <span class="text-slate-600">|</span>
+      <span id="step-name" class="text-sm font-mono text-blue-400">DUAL-SYSTEM TOPOLOGY</span>
+    </div>
+  </header>
+
+  <!-- Main Viewport Center Stage -->
+  <main id="main-stage" class="w-full flex-1 my-8 flex items-center justify-center">
+    <!-- Scene Injected by JS -->
+  </main>
+
+  <!-- Bottom Explanatory Subtitle & Narrative Card -->
+  <footer class="w-full bg-slate-900/95 border border-slate-800 rounded-2xl p-6 flex items-center justify-between shadow-2xl backdrop-blur-md">
+    <div class="flex items-center gap-6">
+      <div id="footer-icon" class="w-12 h-12 rounded-xl bg-blue-500/10 border border-blue-500/30 flex items-center justify-center text-2xl">
+        🔀
+      </div>
+      <div>
+        <div id="footer-title" class="text-xs font-mono font-bold uppercase tracking-wider text-blue-400 mb-1">
+          System Architecture Overview
+        </div>
+        <div id="footer-desc" class="text-base text-slate-200 font-medium max-w-4xl leading-snug">
+          HoneyShield runs a decoupled dual architecture: an authentic enterprise portal and a high-interaction deception sandbox linked by a real-time bridge layer.
+        </div>
+      </div>
+    </div>
+
+    <div class="flex items-center gap-3 font-mono text-xs text-slate-400">
+      <span class="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-slate-300">Port 3002 (Portal)</span>
+      <span class="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-purple-300">Port 3500 (Bridge)</span>
+      <span class="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-emerald-300">Port 5173 (Honeypot)</span>
+    </div>
+  </footer>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const sceneId = parseInt(params.get('scene') || '1');
+
+    const stage = document.getElementById('main-stage');
+    const stepBadge = document.getElementById('step-badge');
+    const stepName = document.getElementById('step-name');
+    const footerIcon = document.getElementById('footer-icon');
+    const footerTitle = document.getElementById('footer-title');
+    const footerDesc = document.getElementById('footer-desc');
+
+    if (sceneId === 1) {
+      // 1. TOPOLOGY
+      stepBadge.textContent = 'DEMO STAGE 1 / 6';
+      stepName.textContent = 'DUAL-SYSTEM ARCHITECTURE TOPOLOGY';
+      footerIcon.textContent = '🔀';
+      footerTitle.textContent = 'Decoupled Defense Topology';
+      footerDesc.textContent = 'Production services are strictly decoupled from the deception layer. The Bridge Layer monitors failed authentications and dynamically executes silent redirects without alerting attackers.';
+
+      stage.innerHTML = `
+        <div class="w-full max-w-6xl grid grid-cols-3 gap-8">
+          <div class="bg-slate-900 border border-blue-500/50 rounded-2xl p-8 glow-blue">
+            <div class="flex items-center justify-between mb-4">
+              <span class="text-3xl">💼</span>
+              <span class="px-3 py-1 bg-blue-500/20 text-blue-400 font-mono text-xs rounded-full border border-blue-500/30">Port 3002</span>
+            </div>
+            <h3 class="text-xl font-bold text-white mb-2">AcmeCorp Finance Portal</h3>
+            <p class="text-sm text-slate-400 mb-6">Authentic production system with executive login, financial reports, real payroll, and revenue ledgers.</p>
+            <div class="p-3 bg-slate-950 rounded-xl border border-slate-800 font-mono text-xs text-emerald-400 flex items-center gap-2">
+              <span class="w-2.5 h-2.5 rounded-full bg-emerald-400"></span> Legitimate Employees Only
+            </div>
+          </div>
+
+          <div class="bg-slate-900 border border-purple-500/60 rounded-2xl p-8 glow-blue">
+            <div class="flex items-center justify-between mb-4">
+              <span class="text-3xl">🔀</span>
+              <span class="px-3 py-1 bg-purple-500/20 text-purple-400 font-mono text-xs rounded-full border border-purple-500/30">Port 3500</span>
+            </div>
+            <h3 class="text-xl font-bold text-white mb-2">Bridge Intelligence Layer</h3>
+            <p class="text-sm text-slate-400 mb-6">Monitors brute-force spikes, evaluates anomaly risk scores, and routes intruders into the honeypot on 3 failed attempts.</p>
+            <div class="p-3 bg-slate-950 rounded-xl border border-slate-800 font-mono text-xs text-purple-300 flex items-center gap-2">
+              <span class="w-2.5 h-2.5 rounded-full bg-purple-400 animate-pulse"></span> 3-Attempt Threshold Trigger
+            </div>
+          </div>
+
+          <div class="bg-slate-900 border border-emerald-500/50 rounded-2xl p-8 glow-green">
+            <div class="flex items-center justify-between mb-4">
+              <span class="text-3xl">🛡️</span>
+              <span class="px-3 py-1 bg-emerald-500/20 text-emerald-400 font-mono text-xs rounded-full border border-emerald-500/30">Port 5173</span>
+            </div>
+            <h3 class="text-xl font-bold text-white mb-2">HoneyShield Deception Grid</h3>
+            <p class="text-sm text-slate-400 mb-6">High-interaction sandbox deployed with canary files, bait SQL tables, and keystroke/hardware fingerprint telemetry.</p>
+            <div class="p-3 bg-slate-950 rounded-xl border border-slate-800 font-mono text-xs text-emerald-400 flex items-center gap-2">
+              <span class="w-2.5 h-2.5 rounded-full bg-emerald-400"></span> Active Deception Sandbox
+            </div>
+          </div>
+        </div>
+      `;
+    } else if (sceneId === 2) {
+      // 2. REAL EMPLOYEE LOGIN
+      stepBadge.textContent = 'DEMO STAGE 2 / 6';
+      stepName.textContent = 'LEGITIMATE EMPLOYEE ACCESS';
+      footerIcon.textContent = '🔐';
+      footerTitle.textContent = 'Production Clearance Verified';
+      footerDesc.textContent = 'Employee John Smith enters valid credentials at port 3002. Authentication passes MongoDB validation with 0 failures, granting access to real financial intelligence.';
+
+      stage.innerHTML = `
+        <div class="w-full max-w-5xl bg-slate-900 border border-slate-700 rounded-2xl overflow-hidden shadow-2xl">
+          <div class="bg-slate-800/90 px-6 py-3 border-b border-slate-700 flex items-center justify-between text-xs font-mono text-slate-300">
+            <div class="flex items-center gap-2">
+              <span class="w-3 h-3 rounded-full bg-red-500 inline-block"></span>
+              <span class="w-3 h-3 rounded-full bg-yellow-500 inline-block"></span>
+              <span class="w-3 h-3 rounded-full bg-green-500 inline-block"></span>
+              <span class="ml-3 text-slate-400">http://localhost:3002/dashboard — AcmeCorp Financial</span>
+            </div>
+            <span class="text-emerald-400 font-bold flex items-center gap-1.5">
+              <span class="w-2 h-2 rounded-full bg-emerald-400"></span> AUTHENTICATED: John Smith (CEO)
+            </span>
+          </div>
+
+          <div class="p-8">
+            <div class="flex justify-between items-center mb-6">
+              <div>
+                <h2 class="text-2xl font-extrabold text-white">Executive Financial Operations</h2>
+                <p class="text-xs text-slate-400 mt-1">AcmeCorp Real Ledger · Clearance Level: Top Secret</p>
+              </div>
+              <span class="px-4 py-1.5 rounded-full bg-emerald-500/20 text-emerald-400 font-mono text-xs font-bold border border-emerald-500/30">
+                REAL PRODUCTION LEDGER
+              </span>
+            </div>
+
+            <div class="grid grid-cols-3 gap-6 mb-8">
+              <div class="bg-slate-950 p-5 rounded-xl border border-slate-800">
+                <div class="text-xs text-slate-400 uppercase font-mono">Q3 Real Revenue</div>
+                <div class="text-3xl font-extrabold text-emerald-400 font-mono mt-2">$4,823,450</div>
+                <div class="text-xs text-slate-500 mt-1">Verified with Corporate Banking</div>
+              </div>
+              <div class="bg-slate-950 p-5 rounded-xl border border-slate-800">
+                <div class="text-xs text-slate-400 uppercase font-mono">Active Accounts</div>
+                <div class="text-3xl font-extrabold text-blue-400 font-mono mt-2">147 Enterprise</div>
+                <div class="text-xs text-slate-500 mt-1">99.98% Service SLA</div>
+              </div>
+              <div class="bg-slate-950 p-5 rounded-xl border border-slate-800">
+                <div class="text-xs text-slate-400 uppercase font-mono">SOC Threat Level</div>
+                <div class="text-3xl font-extrabold text-emerald-400 font-mono mt-2">0 ANOMALIES</div>
+                <div class="text-xs text-slate-500 mt-1">No Brute-Force Activity</div>
+              </div>
+            </div>
+
+            <div class="bg-slate-950 rounded-xl p-5 border border-slate-800">
+              <div class="text-sm font-bold text-slate-200 mb-3">Enterprise Financial Dossiers (Encrypted)</div>
+              <div class="space-y-2 text-xs font-mono text-slate-400">
+                <div class="flex justify-between p-2.5 bg-slate-900/60 rounded border border-slate-800">
+                  <span>📁 RPT-001_Q3_2025_Financial_Audits.pdf</span>
+                  <span class="text-emerald-400">VERIFIED · 4.8 MB</span>
+                </div>
+                <div class="flex justify-between p-2.5 bg-slate-900/60 rounded border border-slate-800">
+                  <span>📁 RPT-002_Executive_Payroll_Master.xlsx</span>
+                  <span class="text-blue-400">RESTRICTED · 12.1 MB</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    } else if (sceneId === 3) {
+      // 3. ATTACKER BRUTE FORCE & BRIDGE INTERCEPT
+      stepBadge.textContent = 'DEMO STAGE 3 / 6';
+      stepName.textContent = 'ATTACKER BRUTE-FORCE & BRIDGE INTERCEPTION';
+      footerIcon.textContent = '⚠️';
+      footerTitle.textContent = 'Anomaly Spike Detected';
+      footerDesc.textContent = 'An adversary at 198.51.100.77 attempts dictionary passwords on the Finance Portal. The Bridge Layer intercepts every request, increments failure counts, and arms the redirect trap.';
+
+      stage.innerHTML = `
+        <div class="w-full max-w-6xl grid grid-cols-2 gap-8">
+          <!-- Left: Attacker Console -->
+          <div class="bg-slate-900 border border-red-500/60 rounded-2xl overflow-hidden shadow-2xl glow-red">
+            <div class="bg-red-950/80 px-6 py-3 border-b border-red-500/40 flex justify-between items-center text-xs font-mono text-red-300">
+              <span class="font-bold">ATTACKER BROWSER // PORT 3002</span>
+              <span class="bg-red-500/20 px-3 py-1 rounded text-red-400 border border-red-500/30 font-bold">ATTEMPT #2 (FAILED)</span>
+            </div>
+
+            <div class="p-8 space-y-5">
+              <div>
+                <label class="text-xs text-slate-400 font-mono">Target Username</label>
+                <div class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 font-mono text-white mt-1">j.smith</div>
+              </div>
+              <div>
+                <label class="text-xs text-slate-400 font-mono">Brute-Force Payload</label>
+                <div class="w-full bg-slate-950 border border-red-500/50 rounded-xl px-4 py-3 font-mono text-red-400 mt-1">••••••••••••• (smith2024)</div>
+              </div>
+              <div class="p-4 bg-red-500/10 border border-red-500/30 rounded-xl text-xs text-red-400 flex items-center gap-2">
+                <span>⚠️</span> <span>Invalid credentials. 1 attempt remaining before security lockout.</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right: Bridge Telemetry -->
+          <div class="bg-slate-950 border border-purple-500/60 rounded-2xl p-8 shadow-2xl font-mono text-xs glow-blue">
+            <div class="flex justify-between items-center pb-4 mb-6 border-b border-slate-800">
+              <div class="flex items-center gap-2">
+                <span class="text-2xl">🔀</span>
+                <span class="text-purple-400 font-bold text-base">Bridge Layer Anomaly Stream</span>
+              </div>
+              <span class="px-3 py-1 bg-yellow-500/10 text-yellow-400 rounded-full border border-yellow-500/20 font-bold">PORT 3500</span>
+            </div>
+
+            <div class="space-y-4 text-sm">
+              <div class="flex justify-between p-3 bg-slate-900 rounded-xl">
+                <span class="text-slate-400">Adversary Source IP:</span>
+                <span class="text-white font-bold">198.51.100.77 (Frankfurt, DE)</span>
+              </div>
+              <div class="flex justify-between p-3 bg-slate-900 rounded-xl">
+                <span class="text-slate-400">Target Account:</span>
+                <span class="text-blue-400 font-bold">j.smith</span>
+              </div>
+              <div class="flex justify-between p-3 bg-slate-900 rounded-xl">
+                <span class="text-slate-400">Failure Threshold:</span>
+                <span class="text-yellow-400 font-bold">2 / 3 ATTEMPTS</span>
+              </div>
+              <div class="flex justify-between p-3 bg-slate-900 rounded-xl">
+                <span class="text-slate-400">Bridge Status:</span>
+                <span class="text-purple-400 font-bold animate-pulse">ARMED: NEXT FAILURE REDIRECTS TO DECEPTION</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    } else if (sceneId === 4) {
+      // 4. SILENT REDIRECT TRIGGER
+      stepBadge.textContent = 'DEMO STAGE 4 / 6';
+      stepName.textContent = 'SILENT HONEYPOT REDIRECTION';
+      footerIcon.textContent = '🚨';
+      footerTitle.textContent = 'Threshold Exceeded · Redirection Fired';
+      footerDesc.textContent = 'On Attempt #3, the Bridge Layer triggers REDIRECT_TO_HONEYPOT. The portal displays a convincing authentication spinner while seamlessly diverting the adversary to port 5173.';
+
+      stage.innerHTML = `
+        <div class="w-full max-w-4xl bg-slate-900 border border-purple-500 rounded-2xl p-10 text-center shadow-2xl glow-blue">
+          <div class="inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-mono font-bold bg-red-500/20 text-red-400 border border-red-500/30 mb-6">
+            <span>🚨</span> THRESHOLD EXCEEDED (ATTEMPT #3 REACHED)
+          </div>
+
+          <h2 class="text-3xl font-extrabold text-white mb-3">Silent Honeypot Redirection Triggered</h2>
+          <p class="text-sm text-slate-300 max-w-xl mx-auto mb-8">
+            The attacker is seamlessly diverted into the synthetic Honeypot reality (Port 5173). To the adversary, login appears to succeed—the deception remains completely invisible.
+          </p>
+
+          <div class="bg-slate-950 p-8 rounded-2xl border border-slate-800 max-w-lg mx-auto space-y-4">
+            <div class="w-12 h-12 border-4 border-slate-700 border-t-purple-500 rounded-full animate-spin mx-auto"></div>
+            <div class="text-sm font-mono text-slate-200">Authenticating executive session...</div>
+            <div class="text-xs font-mono text-purple-400 bg-purple-500/10 py-2 px-4 rounded-xl border border-purple-500/20">
+              ➔ SILENT ROUTE: http://localhost:5173/dashboard?user=j.smith&token=TRAP-992
+            </div>
+          </div>
+        </div>
+      `;
+    } else if (sceneId === 5) {
+      // 5. HONEYPOT SANDBOX TRAP
+      stepBadge.textContent = 'DEMO STAGE 5 / 6';
+      stepName.textContent = 'ADVERSARY TRAPPED IN DECEPTION SANDBOX';
+      footerIcon.textContent = '🍯';
+      footerTitle.textContent = 'High-Interaction Honeypot Active';
+      footerDesc.textContent = 'The intruder explores the decoy environment, accessing canary tokens and fake payroll tables. HoneyShield logs keystrokes, canvas fingerprints, and telemetry without tipping them off.';
+
+      stage.innerHTML = `
+        <div class="w-full max-w-5xl bg-slate-900 border border-emerald-500/60 rounded-2xl overflow-hidden shadow-2xl glow-green">
+          <div class="bg-slate-800 px-6 py-3 border-b border-slate-700 flex justify-between items-center text-xs font-mono">
+            <span class="text-slate-300">http://localhost:5173/dashboard (HoneyShield Deception Sandbox)</span>
+            <span class="text-red-400 font-bold bg-red-500/10 px-3 py-1 rounded border border-red-500/20 flex items-center gap-1.5">
+              <span class="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span> TRAP ACTIVE: SESSION TRAP-j.smith-1094
+            </span>
+          </div>
+
+          <div class="p-8">
+            <div class="flex justify-between items-center mb-6">
+              <div>
+                <h3 class="text-2xl font-bold text-white">AcmeCorp Employee Portal (Synthetic Mirror)</h3>
+                <p class="text-xs text-slate-400 mt-1">Attacker believes they breached security. Corporate core remains 100% untouched.</p>
+              </div>
+              <span class="px-4 py-1.5 rounded-full bg-yellow-500/20 text-yellow-400 text-xs font-mono font-bold border border-yellow-500/30">
+                🍯 BAIT ASSETS DEPLOYED
+              </span>
+            </div>
+
+            <div class="grid grid-cols-2 gap-6 text-xs font-mono">
+              <div class="bg-slate-950 p-5 rounded-xl border border-slate-800">
+                <div class="font-bold text-slate-200 text-sm mb-3">Decoy Databases & Canary Files</div>
+                <div class="space-y-2 text-slate-300">
+                  <div class="p-2.5 bg-red-500/10 border border-red-500/20 rounded text-red-400">
+                    📄 payroll_2025_q3.xlsx (Canary Token Embedded)
+                  </div>
+                  <div class="p-2.5 bg-yellow-500/10 border border-yellow-500/20 rounded text-yellow-400">
+                    📄 master_encryption_keys.txt (Decoy AES-256)
+                  </div>
+                  <div class="p-2.5 bg-blue-500/10 border border-blue-500/20 rounded text-blue-400">
+                    📁 /api/v2/database/query (SQL Injection Honeypot)
+                  </div>
+                </div>
+              </div>
+
+              <div class="bg-slate-950 p-5 rounded-xl border border-slate-800">
+                <div class="font-bold text-slate-200 text-sm mb-3">Forensic Telemetry Harvested</div>
+                <div class="space-y-3 text-slate-300">
+                  <div class="flex justify-between border-b border-slate-800/80 pb-2">
+                    <span class="text-slate-400">Attacker IP:</span>
+                    <span class="text-white font-bold">198.51.100.77</span>
+                  </div>
+                  <div class="flex justify-between border-b border-slate-800/80 pb-2">
+                    <span class="text-slate-400">Device Canvas Hash:</span>
+                    <span class="text-emerald-400 font-bold">#a89f-29d1-817b</span>
+                  </div>
+                  <div class="flex justify-between border-b border-slate-800/80 pb-2">
+                    <span class="text-slate-400">FastAPI ML Risk Score:</span>
+                    <span class="text-red-400 font-extrabold text-base">98 / 100 (CRITICAL)</span>
+                  </div>
+                  <div class="flex justify-between pt-1">
+                    <span class="text-slate-400">Keystroke Dynamics:</span>
+                    <span class="text-yellow-400 font-bold">142 WPM (Automated Script)</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    } else if (sceneId === 6) {
+      // 6. SOC COMMAND CENTER & PERIMETER BLOCK
+      stepBadge.textContent = 'DEMO STAGE 6 / 6';
+      stepName.textContent = 'UNIFIED SOC COMMAND & ZERO-TRUST BLOCK';
+      footerIcon.textContent = '🛑';
+      footerTitle.textContent = 'Forensic Quarantine & Automated Block';
+      footerDesc.textContent = 'The SOC Command Center displays real-time 3D attack arcs, analyzes ML risk telemetry, and permanently quarantines the adversary across both systems by IP and hardware fingerprint.';
+
+      stage.innerHTML = `
+        <div class="w-full max-w-5xl bg-slate-900 border border-slate-700 rounded-2xl p-8 shadow-2xl">
+          <div class="flex justify-between items-center mb-6 pb-4 border-b border-slate-800">
+            <div>
+              <h2 class="text-2xl font-bold text-white flex items-center gap-3">
+                <span>🛡️</span> HoneyShield SOC Command Center & Bridge Monitor
+              </h2>
+              <p class="text-xs text-slate-400 mt-1">Cross-System Threat Stream · MITRE ATT&CK Mapping · Automated Quarantine</p>
+            </div>
+            <div class="flex items-center gap-2">
+              <span class="w-3 h-3 rounded-full bg-emerald-400 animate-pulse"></span>
+              <span class="text-xs font-mono text-emerald-400 font-bold">Live WebSockets Active</span>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-4 gap-4 mb-6 font-mono text-xs">
+            <div class="bg-slate-950 p-4 rounded-xl border border-slate-800">
+              <div class="text-slate-400 uppercase text-[10px]">Tracked Sessions</div>
+              <div class="text-2xl font-extrabold text-blue-400 mt-1">1 ACTIVE</div>
+            </div>
+            <div class="bg-slate-950 p-4 rounded-xl border border-slate-800">
+              <div class="text-slate-400 uppercase text-[10px]">Brute-Force Failures</div>
+              <div class="text-2xl font-extrabold text-yellow-400 mt-1">3 ATTEMPTS</div>
+            </div>
+            <div class="bg-slate-950 p-4 rounded-xl border border-slate-800">
+              <div class="text-slate-400 uppercase text-[10px]">Trapped in Honeypot</div>
+              <div class="text-2xl font-extrabold text-purple-400 mt-1">1 INTRUDER</div>
+            </div>
+            <div class="bg-slate-950 p-4 rounded-xl border border-slate-800">
+              <div class="text-slate-400 uppercase text-[10px]">Perimeter Status</div>
+              <div class="text-2xl font-extrabold text-red-400 mt-1">QUARANTINED</div>
+            </div>
+          </div>
+
+          <div class="bg-slate-950 rounded-xl p-5 border border-slate-800 font-mono text-xs">
+            <div class="text-slate-400 font-bold mb-3 flex justify-between">
+              <span>Live Cross-System Event Stream</span>
+              <span class="text-[10px] text-emerald-400">Synced across Port 3002 & 5173</span>
+            </div>
+            <div class="space-y-2 text-xs">
+              <div class="p-3 bg-red-500/10 border border-red-500/30 rounded-lg flex justify-between items-center text-red-400">
+                <span class="font-bold">🛑 PERIMETER_BLOCK: 198.51.100.77 + Hardware Fingerprint #a89f permanently locked</span>
+                <span class="text-xs text-slate-400">Just now</span>
+              </div>
+              <div class="p-3 bg-purple-500/10 border border-purple-500/30 rounded-lg flex justify-between items-center text-purple-300">
+                <span>🔀 SILENT_REDIRECT: Attacker isolated in deception sandbox (Threshold exceeded)</span>
+                <span class="text-xs text-slate-400">18s ago</span>
+              </div>
+              <div class="p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg flex justify-between items-center text-yellow-400">
+                <span>⚠️ BRUTE_FORCE_ALERT: Multiple failed logins on target account 'j.smith'</span>
+                <span class="text-xs text-slate-400">32s ago</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+  </script>
+</body>
+</html>

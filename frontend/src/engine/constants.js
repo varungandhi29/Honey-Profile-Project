@@ -131,6 +131,7 @@ export const ADMIN_NAV = [
   { id:'Data Vault',          label:'Data Vault' },
   { id:'Live Tracking',       label:'Live Tracking' },
   { id:'Blocked IPs',         label:'Blocked IPs' },
+  { id:'alert-settings',      label:'Alert Settings', icon:'🔔', description:'Configure Slack, Discord, Telegram, Email webhooks' },
   { id:'Settings',            label:'Settings' },
 ]
 

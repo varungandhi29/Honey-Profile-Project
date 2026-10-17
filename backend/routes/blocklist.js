@@ -14,8 +14,108 @@ import { detectLocation, resolveIPLocation } from '../middleware/geoip.js'
 import { requireAdmin, isAdminAuthenticated } from '../middleware/auth.js'
 import logger from '../middleware/logger.js'
 import { getIPv6Prefix, verifyBlockState } from '../middleware/blockCheck.js'
+import { verifyQuickBlockToken, sendAlert } from '../services/alertService.js'
 
 const router = express.Router()
+
+// GET /api/blocklist/quick-block — one-click block from Slack/Discord/Telegram
+router.get('/quick-block', async (req, res) => {
+  try {
+    const { ip, reason, token } = req.query
+
+    if (!ip || !token) {
+      return res.status(400).send(`
+        <html><body style="font-family:monospace;background:#0A0E1A;color:#EF4444;padding:40px;text-align:center">
+          <h2>❌ Invalid Request</h2><p>Missing IP or token</p>
+        </body></html>
+      `)
+    }
+
+    // Verify the HMAC token to prevent unauthorized blocks
+    if (!verifyQuickBlockToken(ip, token)) {
+      return res.status(403).send(`
+        <html><body style="font-family:monospace;background:#0A0E1A;color:#EF4444;padding:40px;text-align:center">
+          <h2>❌ Invalid or Expired Token</h2><p>This block link has expired. Use the dashboard to block manually.</p>
+        </body></html>
+      `)
+    }
+
+    // Check if already blocked
+    const existing = await BlockedIP.findOne({ ip })
+    if (existing) {
+      return res.send(`
+        <html><body style="font-family:monospace;background:#0A0E1A;color:#F59E0B;padding:40px;text-align:center">
+          <h2>⚠️ Already Blocked</h2>
+          <p>IP <strong>${ip}</strong> is already permanently blocked.</p>
+          <p style="color:#475569">Blocked on: ${existing.blockedAt?.toLocaleString()}</p>
+        </body></html>
+      `)
+    }
+
+    // Block the IP
+    await BlockedIP.create({
+      ip, reason: reason || 'Quick-blocked from alert',
+      blockedBy: 'QUICK_BLOCK_LINK',
+      permanent: true,
+      blockedAt: new Date(),
+      attemptCount: 0
+    })
+    await cache.set(`blocked:${ip}`, { blocked: true, reason: reason || 'Quick block' }, 86400 * 365)
+
+    // Terminate any active sessions for this IP
+    try {
+      await Session.updateMany(
+        { ip, role: { $ne: 'ADMIN' }, username: { $ne: 'admin' }, isActive: true },
+        { isActive: false, isBlocked: true, logoutTime: new Date() }
+      )
+    } catch {}
+
+    // Broadcast to dashboard
+    broadcast('ip_blocked', {
+      ip, reason: reason || 'Quick-blocked via alert link',
+      blockedBy: 'QUICK_BLOCK_LINK',
+      timestamp: new Date().toISOString()
+    })
+    broadcast('session_blocked', {
+      ip, reason: reason || 'Quick-blocked via alert link',
+      timestamp: new Date().toISOString()
+    })
+
+    logger.info(`[QUICK BLOCK] ${ip} blocked via alert link — reason: ${reason}`)
+
+    // Return success page
+    res.send(`
+      <html>
+        <head><title>IP Blocked — HoneyShield</title></head>
+        <body style="font-family:Inter,sans-serif;background:#0A0E1A;color:#F1F5F9;padding:60px;text-align:center;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center">
+          <div style="font-size:64px;margin-bottom:16px">🛡️</div>
+          <h1 style="color:#22C55E;font-size:28px;margin-bottom:8px">IP Blocked Successfully</h1>
+          <p style="color:#94A3B8;font-size:16px;margin-bottom:24px">
+            <strong style="color:#F1F5F9">${ip}</strong> has been permanently blocked across all systems.
+          </p>
+          <div style="background:#111827;border:1px solid rgba(34,197,94,0.2);border-radius:12px;padding:20px;max-width:400px;width:100%;margin-bottom:24px">
+            <div style="color:#64748B;font-size:12px;margin-bottom:4px">Reason</div>
+            <div style="color:#F1F5F9;font-size:14px">${reason || 'Quick-blocked from alert'}</div>
+            <div style="color:#64748B;font-size:12px;margin-top:12px;margin-bottom:4px">Blocked At</div>
+            <div style="color:#F1F5F9;font-size:14px">${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} IST</div>
+          </div>
+          <a href="${process.env.FRONTEND_URL || 'https://honeyprofile.vercel.app'}"
+            style="display:inline-block;padding:12px 24px;background:linear-gradient(135deg,#3B82F6,#1D4ED8);color:white;text-decoration:none;border-radius:8px;font-weight:600;font-size:14px">
+            📊 Open SOC Dashboard
+          </a>
+          <p style="color:#475569;font-size:11px;margin-top:24px">HoneyShield v2 — Active Cyber Deception Platform</p>
+        </body>
+      </html>
+    `)
+  } catch (err) {
+    logger.error(`[QUICK BLOCK ERROR] ${err.message}`)
+    res.status(500).send(`
+      <html><body style="font-family:monospace;background:#0A0E1A;color:#EF4444;padding:40px;text-align:center">
+        <h2>❌ Block Failed</h2><p>${err.message}</p>
+      </body></html>
+    `)
+  }
+})
 
 // Rate limiter for check-status per C2: max 40 requests per minute per IP
 const checkStatusLimiter = rateLimit({
@@ -173,6 +273,16 @@ router.post('/', requireAdmin, async (req, res) => {
     })
 
     logger.info(`[BLOCK] IP ${ip} (Subnet: ${subnetPrefix || 'N/A'}) blocked by ${adminUsername} — reason: ${reason}`)
+
+    // Alert channels about manual admin block
+    await sendAlert({
+      type: 'IP_MANUALLY_BLOCKED',
+      severity: 'MEDIUM',
+      ip: req.body.ip,
+      message: `Admin manually blocked IP: ${req.body.reason || 'No reason given'}`,
+      timestamp: new Date().toISOString()
+    }).catch(err => logger.warn(`[ALERT] Failed: ${err.message}`))
+
     res.json({ success: true, blocked, sessionsTerminated: terminatedCount })
   } catch (err) {
     logger.error(`Block IP error: ${err.message}`)
