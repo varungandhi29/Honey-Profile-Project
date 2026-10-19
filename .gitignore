@@ -25,3 +25,9 @@ backend/.admin-password-once.txt
 brag-output/
 .agents/
 skills-lock.json
+
+FinancePortal/**/node_modules/
+BridgeLayer/node_modules/
+FinancePortal/**/.env
+BridgeLayer/.env
+

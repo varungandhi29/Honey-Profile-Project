@@ -119,13 +119,21 @@ const frontendDist = path.join(__dirname, '../frontend/dist')
 
 app.use(express.static(frontendDist))
 
-app.get('/api/health', async (req, res) => {
+app.get('/api/health', (req, res) => {
   res.json({
-    status: 'ok',
-    version: '2.0.0',
-    mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
-    mongoUri: mongoUri || (mongoServer ? mongoServer.getUri() : null),
+    status: 'healthy',
+    service: 'HoneyShield v2 Backend',
+    timestamp: new Date().toISOString(),
     uptime: process.uptime(),
+    mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+    version: '2.0.0'
+  })
+})
+
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'healthy',
+    service: 'HoneyShield v2 Backend',
     timestamp: new Date().toISOString()
   })
 })

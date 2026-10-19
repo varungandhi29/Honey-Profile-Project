@@ -1,10 +1,33 @@
-FROM node:20-alpine
+# HoneyShield v2 — Backend
+FROM node:22-alpine
+
+# Install curl for healthcheck
+RUN apk add --no-cache curl
+
 WORKDIR /app
-RUN apk add --no-cache python3 make g++
-COPY package.json .
-RUN npm install --production
+
+# Copy package files first for layer caching
+COPY package*.json ./
+
+# Install dependencies
+RUN npm ci --only=production
+
+# Copy source code
 COPY . .
-RUN mkdir -p logs
+
+# Create non-root user for security
+RUN mkdir -p /app/logs && \
+    addgroup -g 1001 -S honeyshield && \
+    adduser -S honeyshield -u 1001 && \
+    chown -R honeyshield:honeyshield /app
+USER honeyshield
+
+# Expose backend port
 EXPOSE 3001
-HEALTHCHECK --interval=30s --timeout=10s CMD wget -qO- http://localhost:3001/api/health || exit 1
-CMD ["node","server.js"]
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+  CMD curl -f http://localhost:3001/api/health || exit 1
+
+# Start server
+CMD ["node", "server.js"]

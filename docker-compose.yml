@@ -1,66 +1,181 @@
 version: '3.8'
 
-services:
-  redis:
-    image: redis:alpine
-    container_name: honey_redis
-    ports:
-      - "6379:6379"
-    restart: always
+name: honeyshield
 
+services:
+
+  # MongoDB Database
   mongodb:
-    image: mongo:latest
-    container_name: honey_mongo
+    image: mongo:7.0
+    container_name: honeyshield-mongodb
+    restart: unless-stopped
     environment:
-      - MONGO_INITDB_ROOT_USERNAME=admin
-      - MONGO_INITDB_ROOT_PASSWORD=password123
+      MONGO_INITDB_DATABASE: honeyshield
+    volumes:
+      - mongodb_data:/data/db
+      - ./docker/mongo-init.js:/docker-entrypoint-initdb.d/init.js:ro
     ports:
       - "27017:27017"
+    networks:
+      - honeyshield-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+
+  # Redis Cache
+  redis:
+    image: redis:7.2-alpine
+    container_name: honeyshield-redis
+    restart: unless-stopped
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
     volumes:
-      - mongo_data:/data/db
-    restart: always
-
-  ai-engine:
-    build:
-      context: ./ai-service
-      dockerfile: Dockerfile
-    container_name: honey_ai
+      - redis_data:/data
     ports:
-      - "8000:8000"
-    environment:
-      - PORT=8000
-    restart: always
+      - "6379:6379"
+    networks:
+      - honeyshield-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
+  # HoneyShield Backend
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: honey_backend
+    container_name: honeyshield-backend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      MONGODB_URI: mongodb://mongodb:27017/honeyshield
+      REDIS_URL: redis://redis:6379
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173}
+      BACKEND_URL: ${BACKEND_URL:-http://localhost:3001}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:-$$2b$$10$$wtKoHQ1crkLBZ6symm57cenDxNrpg0b2wkQuYS6wo6nFD9Whwyije}
+      VAULT_ENCRYPTION_KEY: ${VAULT_ENCRYPTION_KEY:-995827b3417bbaecaab5d5b01c30aa0ef0990d7860cf1098f8baf69ea728664f}
+      JWT_SECRET: ${JWT_SECRET:-honeyshield-jwt-secret-change-in-production}
+      BLOCK_TOKEN_SECRET: ${BLOCK_TOKEN_SECRET:-honeyshield-block-secret-change-in-production}
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      ALERT_EMAIL_TO: ${ALERT_EMAIL_TO:-}
     ports:
       - "3001:3001"
-    environment:
-      - PORT=3001
-      - MONGODB_URI=mongodb://admin:password123@mongodb:27017/honeyshield?authSource=admin
-      - REDIS_URL=redis://redis:6379
-      - AI_SERVICE_URL=http://ai-engine:8000
-      - FRONTEND_URL=http://localhost:3000
-      - NODE_ENV=production
     depends_on:
-      - mongodb
-      - redis
-      - ai-engine
-    restart: always
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - honeyshield-network
+    volumes:
+      - backend_logs:/app/logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
+  # HoneyShield Frontend
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    container_name: honey_frontend
+      args:
+        VITE_BACKEND_URL: ${BACKEND_URL:-http://localhost:3001}
+    container_name: honeyshield-frontend
+    restart: unless-stopped
     ports:
-      - "3000:80"
+      - "5173:80"
     depends_on:
-      - backend
-    restart: always
+      backend:
+        condition: service_healthy
+    networks:
+      - honeyshield-network
+
+  # Finance Portal Backend
+  finance-backend:
+    build:
+      context: ./FinancePortal/backend
+      dockerfile: Dockerfile
+    container_name: honeyshield-finance-backend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      MONGODB_URI: mongodb://mongodb:27017/financeportal
+      REDIS_URL: redis://redis:6379
+      BRIDGE_URL: http://bridge:3500
+      FRONTEND_URL: ${FINANCE_FRONTEND_URL:-http://localhost:3002}
+      JWT_SECRET: ${JWT_SECRET:-finance-jwt-secret-change-in-production}
+    ports:
+      - "4000:4000"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - honeyshield-network
+
+  # Finance Portal Frontend
+  finance-frontend:
+    build:
+      context: ./FinancePortal/frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_BACKEND_URL: ${FINANCE_BACKEND_URL:-http://localhost:4000}
+        VITE_HONEYPOT_URL: ${BACKEND_URL:-http://localhost:3001}
+    container_name: honeyshield-finance-frontend
+    restart: unless-stopped
+    ports:
+      - "3002:80"
+    depends_on:
+      - finance-backend
+    networks:
+      - honeyshield-network
+
+  # Bridge Layer
+  bridge:
+    build:
+      context: ./BridgeLayer
+      dockerfile: Dockerfile
+    container_name: honeyshield-bridge
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3500
+      REDIS_URL: redis://redis:6379
+      HONEYSHIELD_BACKEND: http://backend:3001
+      FINANCE_BACKEND: http://finance-backend:4000
+    ports:
+      - "3500:3500"
+    depends_on:
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    networks:
+      - honeyshield-network
+
+networks:
+  honeyshield-network:
+    driver: bridge
 
 volumes:
-  mongo_data:
+  mongodb_data:
+    driver: local
+  redis_data:
+    driver: local
+  backend_logs:
+    driver: local
